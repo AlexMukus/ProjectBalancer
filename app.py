@@ -579,6 +579,13 @@ def optimize_with_task_shifting(parser, settings):
         for week_idx, week_data in overloaded_weeks.items():
             excess_hours = week_data['hours'] - week_data['capacity']
             
+            # Получить временные границы текущей недели
+            if week_idx >= len(weeks_with_dates):
+                continue
+            current_week_info = weeks_with_dates[week_idx]
+            week_start = current_week_info['start']
+            week_end = current_week_info['end']
+            
             # Найти задачи, пересекающиеся с этой неделей
             tasks_in_week = []
             for assignment in resource_assignments:
@@ -590,6 +597,10 @@ def optimize_with_task_shifting(parser, settings):
                 task_end = parser._parse_date(task['finish'])
                 if not task_start or not task_end:
                     continue
+                
+                # КРИТИЧНО: Проверить, что задача пересекается с текущей неделей
+                if task_end < week_start or task_start > week_end:
+                    continue  # Задача не пересекается с этой неделей
                 
                 task_hours = parser._parse_work_hours(assignment['work'])
                 tasks_in_week.append({
