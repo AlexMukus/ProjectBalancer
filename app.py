@@ -884,11 +884,26 @@ def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimi
     3. Временное распределение по неделям (если есть timeline_data)
     4. Предложения по оптимизации (если есть optimization_results)
     """
+    import re
+    
+    def remove_emojis(text):
+        """Удалить emoji из текста для совместимости с cp1251"""
+        if isinstance(text, str):
+            # Удалить emoji и другие символы Unicode за пределами cp1251
+            return re.sub(r'[^\u0000-\u04FF]', '', text)
+        return text
+    
     csv_buffer = io.StringIO()
+    
+    # Очистить DataFrame от emoji перед экспортом
+    df_clean = workload_df.copy()
+    for col in df_clean.columns:
+        if df_clean[col].dtype == 'object':
+            df_clean[col] = df_clean[col].apply(remove_emojis)
     
     # Секция 1: Сводка по ресурсам
     csv_buffer.write("СВОДКА ПО РЕСУРСАМ\n")
-    workload_df.to_csv(csv_buffer, index=False)
+    df_clean.to_csv(csv_buffer, index=False)
     csv_buffer.write("\n\n")
     
     # Секция 2: Детализация задач по ресурсам
@@ -931,15 +946,19 @@ def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimi
     # Секция 4: Предложения по оптимизации
     if optimization_results:
         csv_buffer.write("ПРЕДЛОЖЕНИЯ ПО ОПТИМИЗАЦИИ\n")
-        csv_buffer.write("Ресурс,Задача,Действие,Детали\n")
+        csv_buffer.write("Ресурс,Задача,Оригинальные даты,Предлагаемые даты,Смещение (дни),Улучшение,Причина,Приоритет\n")
         
         for suggestion in optimization_results:
-            resource = suggestion['resource']
-            task = suggestion['task']
-            action = suggestion['action']
-            details = suggestion['details']
+            resource = suggestion.get('resource', '')
+            task_name = suggestion.get('task_name', '')
+            orig_dates = f"{suggestion.get('original_start', '')} - {suggestion.get('original_end', '')}"
+            sugg_dates = f"{suggestion.get('suggested_start', '')} - {suggestion.get('suggested_end', '')}"
+            shift_days = suggestion.get('shift_days', '')
+            improvement = suggestion.get('improvement', '')
+            reason = suggestion.get('reason', '')
+            priority = suggestion.get('priority', '')
             
-            csv_buffer.write(f'"{resource}","{task}","{action}","{details}"\n')
+            csv_buffer.write(f'"{resource}","{task_name}","{orig_dates}","{sugg_dates}",{shift_days},"{improvement}","{reason}","{priority}"\n')
         csv_buffer.write("\n")
     
     # Кодировка cp1251 для совместимости с Excel
@@ -1173,23 +1192,25 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
         elements.append(Spacer(1, 0.2*inch))
         
         # Создать таблицу оптимизации
-        opt_table_data = [['Ресурс', 'Задача', 'Действие', 'Детали']]
+        opt_table_data = [['Ресурс', 'Задача', 'Смещение', 'Улучшение', 'Причина']]
         
         for i, suggestion in enumerate(optimization_results[:20]):  # До 20 предложений
-            resource = suggestion.get('resource', '')[:20]
-            task = suggestion.get('task', '')[:25]
-            action = suggestion.get('action', '')[:30]
-            details = suggestion.get('details', '')[:50]
+            resource = suggestion.get('resource', '')[:15]
+            task_name = suggestion.get('task_name', '')[:20]
+            shift_info = f"{suggestion.get('shift_days', '')} дн."
+            improvement = suggestion.get('improvement', '')
+            reason = suggestion.get('reason', '')[:40]
             
             opt_table_data.append([
                 resource,
-                task,
-                action,
-                details
+                task_name,
+                shift_info,
+                improvement,
+                reason
             ])
         
         if len(opt_table_data) > 1:
-            opt_table = Table(opt_table_data, colWidths=[1.2*inch, 1.8*inch, 1.5*inch, 2*inch])
+            opt_table = Table(opt_table_data, colWidths=[1*inch, 1.5*inch, 0.8*inch, 0.8*inch, 2.4*inch])
             opt_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0078D4')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
