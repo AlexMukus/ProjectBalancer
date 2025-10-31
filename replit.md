@@ -5,15 +5,21 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 
 ## Recent Changes (October 31, 2025)
 
+**Latest Bug Fixes (Export Functionality):**
+- Fixed `UnicodeEncodeError` in CSV export: Added `remove_emojis()` function to strip emoji symbols (🔴, 🟢) before cp1251 encoding, ensuring Excel compatibility
+- Fixed `KeyError: 'task'` in export functions: Updated CSV/PDF exporters to use correct optimization_results structure (`task_name`, `shift_days`, `improvement`, `reason`, `priority` instead of deprecated `task`, `action`, `details`)
+- Enhanced export data completeness: CSV/PDF now include 4 sections (summary, task details, weekly timeline, optimization suggestions) with proper field mapping
+
 **Critical Bug Fixes:**
 - Fixed `AttributeError: 'Figure' object has no attribute 'update_xaxis'` - replaced with correct Plotly methods: `update_xaxes()` and `update_yaxes()`
 - Optimized task shifting algorithm: weeks_with_dates construction moved to resource level (instead of repeating for each task)
 - Improved target week determination logic: now finds ALL overlapping weeks, selects the main one with the largest task proportion
 - Added real hours calculation instead of percentages only: hours_removed_from_source and hours_added_to_target
+- Fixed date range filtering bug: `weeks_with_dates` in `optimize_with_task_shifting` now constructed from filtered `date_range` for consistency with timeline_data
 
 **End-to-End Testing:**
 - All core features working correctly
-- Verified: file upload, analysis, optimization, visualization, interactive replacement, export
+- Verified: file upload, analysis, optimization, visualization, interactive replacement, CSV/PDF export with emoji sanitization and correct optimization schema
 
 ## User Preferences
 Предпочитаемый стиль коммуникации: Простой, повседневный язык на русском.
