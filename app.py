@@ -9,6 +9,8 @@ from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # Конфигурация страницы
 st.set_page_config(
@@ -485,6 +487,24 @@ class MSProjectParser:
             timeline_data[resource['name']] = weekly_loads
         
         return timeline_data
+    
+    def get_project_dates(self):
+        """Получить минимальную и максимальную даты проекта"""
+        project_start = None
+        project_end = None
+        
+        for task in self.tasks:
+            if task['start']:
+                task_start = self._parse_date(task['start'])
+                if task_start and (project_start is None or task_start < project_start):
+                    project_start = task_start
+            
+            if task['finish']:
+                task_end = self._parse_date(task['finish'])
+                if task_end and (project_end is None or task_end > project_end):
+                    project_end = task_end
+        
+        return project_start, project_end
 
 # Analysis functions
 def analyze_workload(workload_data):
@@ -762,20 +782,43 @@ def export_to_csv(workload_df, analysis):
     """Export analysis to CSV"""
     csv_buffer = io.StringIO()
     workload_df.to_csv(csv_buffer, index=False)
-    return csv_buffer.getvalue()
+    # Кодировка cp1251 для совместимости с Excel
+    return csv_buffer.getvalue().encode('cp1251')
 
 def export_to_pdf(workload_df, analysis, recommendations):
     """Экспорт анализа в PDF"""
+    # Регистрация шрифтов DejaVu для поддержки кириллицы
+    dejavu_available = False
+    try:
+        pdfmetrics.registerFont(TTFont('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+        pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
+        dejavu_available = True
+    except:
+        pass  # Если шрифты не найдены, используем стандартные Helvetica
+    
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     elements = []
     styles = getSampleStyleSheet()
+    
+    # Выбрать шрифты в зависимости от доступности DejaVu
+    if dejavu_available:
+        normal_font = 'DejaVuSans'
+        bold_font = 'DejaVuSans-Bold'
+        # Обновление стандартных стилей для использования DejaVu Sans
+        for style_name in styles.byName:
+            style = styles[style_name]
+            style.fontName = normal_font
+    else:
+        normal_font = 'Helvetica'
+        bold_font = 'Helvetica-Bold'
     
     # Заголовок
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
         fontSize=24,
+        fontName=bold_font,
         textColor=colors.HexColor('#0078D4'),
         spaceAfter=30
     )
@@ -813,7 +856,8 @@ def export_to_pdf(workload_df, analysis, recommendations):
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0078D4')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 0), (-1, 0), bold_font),
+        ('FONTNAME', (0, 1), (-1, -1), normal_font),
         ('FONTSIZE', (0, 0), (-1, 0), 12),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
         ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
@@ -825,7 +869,12 @@ def export_to_pdf(workload_df, analysis, recommendations):
     
     # Рекомендации
     if recommendations:
-        elements.append(Paragraph("<b>Рекомендации</b>", styles['Heading2']))
+        heading_style = ParagraphStyle(
+            'CustomHeading2',
+            parent=styles['Heading2'],
+            fontName=bold_font
+        )
+        elements.append(Paragraph("<b>Рекомендации</b>", heading_style))
         for i, rec in enumerate(recommendations[:10], 1):
             if rec['type'] == 'Reassign Tasks':
                 rec_text = f"{i}. Перераспределить задачи - Перенести {rec['hours']:.1f}ч от {rec['from']} к {rec['to']}"
@@ -852,6 +901,10 @@ if 'timeline_data' not in st.session_state:
     st.session_state.timeline_data = None
 if 'resource_replacements' not in st.session_state:
     st.session_state.resource_replacements = {}
+if 'date_range_start' not in st.session_state:
+    st.session_state.date_range_start = None
+if 'date_range_end' not in st.session_state:
+    st.session_state.date_range_end = None
 
 # Main application
 def main():
@@ -885,12 +938,52 @@ def main():
                     
                     if parser.parse():
                         st.session_state.parser = parser
+                        # Инициализировать даты проекта
+                        project_start, project_end = parser.get_project_dates()
+                        if project_start and project_end:
+                            st.session_state.date_range_start = project_start.date()
+                            st.session_state.date_range_end = project_end.date()
                         st.session_state.workload_data = parser.get_resource_workload_data()
                         st.session_state.analysis = analyze_workload(st.session_state.workload_data)
                         st.success("✓ Файл успешно проанализирован!")
                         st.rerun()
                     else:
                         st.error("Не удалось проанализировать файл")
+        
+        # Фильтр временного диапазона
+        if st.session_state.parser is not None:
+            st.markdown("---")
+            st.markdown("### 📅 Временной диапазон анализа")
+            
+            # Получить даты проекта
+            project_start, project_end = st.session_state.parser.get_project_dates()
+            
+            if project_start and project_end:
+                col1, col2 = st.columns(2)
+                with col1:
+                    start_date = st.date_input(
+                        "Начало",
+                        value=st.session_state.date_range_start or project_start.date(),
+                        min_value=project_start.date(),
+                        max_value=project_end.date(),
+                        help="Начальная дата анализа"
+                    )
+                with col2:
+                    end_date = st.date_input(
+                        "Конец",
+                        value=st.session_state.date_range_end or project_end.date(),
+                        min_value=project_start.date(),
+                        max_value=project_end.date(),
+                        help="Конечная дата анализа"
+                    )
+                
+                # Обновить session state если изменились
+                if start_date != st.session_state.date_range_start or end_date != st.session_state.date_range_end:
+                    st.session_state.date_range_start = start_date
+                    st.session_state.date_range_end = end_date
+                    # Пересчитать данные с учетом нового диапазона
+                    # TODO: Применить фильтрацию в задаче 4
+                    st.rerun()
         
         st.markdown("---")
         st.markdown("### ℹ️ О программе")

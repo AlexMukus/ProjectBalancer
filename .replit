@@ -2,7 +2,7 @@ modules = ["python-3.11"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["freetype", "glibcLocales", "xcodebuild", "zlib"]
+packages = ["freetype", "glibcLocales", "xcodebuild", "zlib", "dejavu_fonts"]
 
 [deployment]
 deploymentTarget = "autoscale"
@@ -39,7 +39,3 @@ externalPort = 80
 [[ports]]
 localPort = 37749
 externalPort = 3000
-
-[[ports]]
-localPort = 43319
-externalPort = 3001
