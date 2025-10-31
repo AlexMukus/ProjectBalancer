@@ -12,6 +12,10 @@ from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+# Импорт тем оформления
+from fluent_ui_components import get_fluent_ui_css
+from md3_components import get_md3_css, md3_info_panel, get_md3_table_style, get_md3_chart_colors
+
 # Конфигурация страницы
 st.set_page_config(
     page_title="Анализатор управления ресурсами",
@@ -20,104 +24,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Microsoft-inspired styling
-st.markdown("""
-<style>
-    /* Color scheme variables */
-    :root {
-        --primary-blue: #0078D4;
-        --success-green: #107C10;
-        --warning-red: #FF4B4B;
-        --background-grey: #F3F2F1;
-        --text-charcoal: #323130;
-        --accent-purple: #5C2E91;
-        --warning-yellow: #FFB900;
-    }
-    
-    /* Main styling */
-    .stApp {
-        background-color: var(--background-grey);
-    }
-    
-    /* Headers */
-    h1, h2, h3 {
-        color: var(--text-charcoal);
-        font-family: 'Segoe UI', 'Inter', sans-serif;
-    }
-    
-    /* Metric cards */
-    .metric-card {
-        background-color: white;
-        padding: 20px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        margin: 10px 0;
-    }
-    
-    /* Status badges */
-    .status-overloaded {
-        background-color: #FF4B4B;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 12px;
-    }
-    
-    .status-optimal {
-        background-color: #107C10;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 12px;
-    }
-    
-    .status-underutilized {
-        background-color: #FFB900;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 12px;
-    }
-    
-    /* Buttons */
-    .stButton > button {
-        background-color: var(--primary-blue);
-        color: white;
-        border-radius: 4px;
-        border: none;
-        padding: 8px 16px;
-        font-weight: 500;
-    }
-    
-    .stButton > button:hover {
-        background-color: #005A9E;
-    }
-    
-    /* Data tables */
-    .dataframe {
-        font-family: 'Segoe UI', 'Inter', sans-serif;
-        font-size: 14px;
-    }
-    
-    /* File uploader */
-    .uploadedFile {
-        border-color: var(--primary-blue);
-    }
-    
-    /* Sidebar */
-    .css-1d391kg {
-        background-color: white;
-    }
-    
-    /* Info boxes */
-    .stAlert {
-        border-radius: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Инициализация темы в session_state
+if 'theme' not in st.session_state:
+    st.session_state.theme = 'fluent'  # По умолчанию Fluent UI
+
+# Применение выбранной темы
+if st.session_state.theme == 'md3':
+    st.markdown(get_md3_css(), unsafe_allow_html=True)
+else:
+    st.markdown(get_fluent_ui_css(), unsafe_allow_html=True)
 
 # MS Project XML Parser
 class MSProjectParser:
@@ -1403,6 +1318,28 @@ def main():
     
     # Боковая панель
     with st.sidebar:
+        # Переключатель тем
+        st.markdown("### 🎨 Тема оформления")
+        theme_options = {
+            'fluent': 'Fluent UI (классика)',
+            'md3': 'Material Design 3 (современный)'
+        }
+        
+        selected_theme = st.radio(
+            "Выберите тему:",
+            options=list(theme_options.keys()),
+            format_func=lambda x: theme_options[x],
+            key='theme_selector',
+            label_visibility='collapsed'
+        )
+        
+        # Если тема изменилась, обновляем session_state и перезагружаем
+        if selected_theme != st.session_state.theme:
+            st.session_state.theme = selected_theme
+            st.rerun()
+        
+        st.markdown("---")
+        
         st.markdown("### 📁 Загрузка файла MS Project")
         st.markdown("Поддерживаемые форматы: .xml, .mspdi")
         st.info("💡 Чтобы экспортировать .mpp в XML: в MS Project выберите Файл → Сохранить как → выберите Формат XML (*.xml)")
@@ -1593,17 +1530,24 @@ def main():
             business_days = calculate_business_days(st.session_state.date_range_start, st.session_state.date_range_end)
             work_capacity = calculate_work_capacity(business_days)
             
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
+            # MD3 или Fluent UI отображение
+            if st.session_state.theme == 'md3':
+                # Material Design 3 стиль
                 period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
-                st.metric("📅 Период анализа", period_str)
-            
-            with col2:
-                st.metric("📆 Рабочие дни", f"{business_days} дн.")
-            
-            with col3:
-                st.metric("⏰ Емкость на человека", f"{work_capacity} ч.")
+                st.markdown(md3_info_panel(period_str, business_days, work_capacity), unsafe_allow_html=True)
+            else:
+                # Fluent UI стиль (классический)
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
+                    st.metric("📅 Период анализа", period_str)
+                
+                with col2:
+                    st.metric("📆 Рабочие дни", f"{business_days} дн.")
+                
+                with col3:
+                    st.metric("⏰ Емкость на человека", f"{work_capacity} ч.")
         
         st.markdown("---")
         
@@ -1725,6 +1669,10 @@ def main():
             
             # Таблица анализа рабочей нагрузки
             st.markdown("### 📈 Анализ рабочей нагрузки")
+            
+            # Применить MD3 стили для таблиц если выбрана MD3 тема
+            if st.session_state.theme == 'md3':
+                st.markdown(get_md3_table_style(), unsafe_allow_html=True)
             
             # Рассчитать фактические часы для каждого ресурса за период
             actual_hours_dict = {}
@@ -1974,6 +1922,19 @@ def main():
                 if selected_resource_timeline and selected_resource_timeline in timeline_data:
                     resource_timeline = timeline_data[selected_resource_timeline]
                     
+                    # Получить цвета в зависимости от темы
+                    if st.session_state.theme == 'md3':
+                        chart_colors = get_md3_chart_colors()
+                        color_overloaded = chart_colors['overloaded']
+                        color_optimal = chart_colors['optimal']
+                        color_underutilized = chart_colors['underutilized']
+                        color_primary = chart_colors['optimal']
+                    else:
+                        color_overloaded = '#FF4B4B'
+                        color_optimal = '#107C10'
+                        color_underutilized = '#FFB900'
+                        color_primary = '#0078D4'
+                    
                     # График временной загрузки
                     fig_timeline = go.Figure()
                     
@@ -1985,11 +1946,11 @@ def main():
                     colors_timeline = []
                     for pct in percentages:
                         if pct > 100:
-                            colors_timeline.append('#FF4B4B')
+                            colors_timeline.append(color_overloaded)
                         elif pct >= 70:
-                            colors_timeline.append('#107C10')
+                            colors_timeline.append(color_optimal)
                         else:
-                            colors_timeline.append('#FFB900')
+                            colors_timeline.append(color_underutilized)
                     
                     fig_timeline.add_trace(go.Bar(
                         x=weeks,
@@ -2002,9 +1963,9 @@ def main():
                         name='Загрузка'
                     ))
                     
-                    fig_timeline.add_hline(y=100, line_dash="dash", line_color="#FF4B4B", 
+                    fig_timeline.add_hline(y=100, line_dash="dash", line_color=color_overloaded, 
                                           annotation_text="100%", annotation_position="right")
-                    fig_timeline.add_hline(y=target_load, line_dash="dot", line_color="#0078D4", 
+                    fig_timeline.add_hline(y=target_load, line_dash="dot", line_color=color_primary, 
                                           annotation_text=f"Цель {target_load}%", annotation_position="right")
                     
                     fig_timeline.update_layout(
@@ -2119,6 +2080,17 @@ def main():
             # Визуализация
             st.markdown("### 📊 Распределение рабочей нагрузки")
             
+            # Получить цвета в зависимости от темы
+            if st.session_state.theme == 'md3':
+                chart_colors = get_md3_chart_colors()
+                color_overloaded = chart_colors['overloaded']
+                color_optimal = chart_colors['optimal']
+                color_underutilized = chart_colors['underutilized']
+            else:
+                color_overloaded = '#FF4B4B'
+                color_optimal = '#107C10'
+                color_underutilized = '#FFB900'
+            
             fig = go.Figure()
             
             # Add bars
@@ -2126,11 +2098,11 @@ def main():
             for item in display_data:
                 percentage = item['workload_percentage']
                 if percentage > 100:
-                    colors_map.append('#FF4B4B')
+                    colors_map.append(color_overloaded)
                 elif percentage >= 70:
-                    colors_map.append('#107C10')
+                    colors_map.append(color_optimal)
                 else:
-                    colors_map.append('#FFB900')
+                    colors_map.append(color_underutilized)
             
             fig.add_trace(go.Bar(
                 x=[item['resource_name'] for item in display_data],
@@ -2142,9 +2114,9 @@ def main():
             ))
             
             # Добавление пороговых линий
-            fig.add_hline(y=100, line_dash="dash", line_color="#FF4B4B", 
+            fig.add_hline(y=100, line_dash="dash", line_color=color_overloaded, 
                          annotation_text="100% ёмкость", annotation_position="right")
-            fig.add_hline(y=70, line_dash="dash", line_color="#FFB900", 
+            fig.add_hline(y=70, line_dash="dash", line_color=color_underutilized, 
                          annotation_text="70% порог", annotation_position="right")
             
             fig.update_layout(
