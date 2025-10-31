@@ -535,6 +535,8 @@ class MSProjectParser:
                 
                 weekly_loads.append({
                     'week': week['label'],
+                    'week_start': week['start'],
+                    'week_end': week['end'],
                     'hours': week_hours,
                     'capacity': week_capacity,
                     'percentage': week_percentage
@@ -874,10 +876,72 @@ def generate_recommendations(analysis):
     
     return recommendations
 
-def export_to_csv(workload_df, analysis):
-    """Export analysis to CSV"""
+def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimization_results=None):
+    """
+    Экспорт детального анализа в CSV с несколькими секциями:
+    1. Сводка по ресурсам (всегда)
+    2. Детализация задач по ресурсам (если есть parser)
+    3. Временное распределение по неделям (если есть timeline_data)
+    4. Предложения по оптимизации (если есть optimization_results)
+    """
     csv_buffer = io.StringIO()
+    
+    # Секция 1: Сводка по ресурсам
+    csv_buffer.write("СВОДКА ПО РЕСУРСАМ\n")
     workload_df.to_csv(csv_buffer, index=False)
+    csv_buffer.write("\n\n")
+    
+    # Секция 2: Детализация задач по ресурсам
+    if parser:
+        csv_buffer.write("ДЕТАЛИЗАЦИЯ ЗАДАЧ ПО РЕСУРСАМ\n")
+        csv_buffer.write("Ресурс,ID задачи,Название задачи,Начало,Конец,Трудоёмкость (часы)\n")
+        
+        for resource in parser.resources:
+            resource_name = resource['name']
+            resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+            
+            for assignment in resource_assignments:
+                task = next((t for t in parser.tasks if t['id'] == assignment['task_id']), None)
+                if task:
+                    task_id = task.get('id', '')
+                    task_name = task.get('name', 'Без названия')
+                    task_start = task.get('start', '')
+                    task_finish = task.get('finish', '')
+                    task_hours = parser._parse_work_hours(assignment['work'])
+                    
+                    csv_buffer.write(f'"{resource_name}","{task_id}","{task_name}","{task_start}","{task_finish}",{task_hours:.2f}\n')
+        csv_buffer.write("\n\n")
+    
+    # Секция 3: Временное распределение по неделям
+    if timeline_data:
+        csv_buffer.write("ВРЕМЕННОЕ РАСПРЕДЕЛЕНИЕ ПО НЕДЕЛЯМ\n")
+        csv_buffer.write("Ресурс,Неделя начало,Неделя конец,Часы,Ёмкость,Процент загрузки\n")
+        
+        for resource_name, weekly_loads in timeline_data.items():
+            for week_data in weekly_loads:
+                week_start = week_data['week_start'].strftime('%Y-%m-%d')
+                week_end = week_data['week_end'].strftime('%Y-%m-%d')
+                hours = week_data['hours']
+                capacity = week_data['capacity']
+                percentage = week_data['percentage']
+                
+                csv_buffer.write(f'"{resource_name}",{week_start},{week_end},{hours:.2f},{capacity:.2f},{percentage:.2f}\n')
+        csv_buffer.write("\n\n")
+    
+    # Секция 4: Предложения по оптимизации
+    if optimization_results:
+        csv_buffer.write("ПРЕДЛОЖЕНИЯ ПО ОПТИМИЗАЦИИ\n")
+        csv_buffer.write("Ресурс,Задача,Действие,Детали\n")
+        
+        for suggestion in optimization_results:
+            resource = suggestion['resource']
+            task = suggestion['task']
+            action = suggestion['action']
+            details = suggestion['details']
+            
+            csv_buffer.write(f'"{resource}","{task}","{action}","{details}"\n')
+        csv_buffer.write("\n")
+    
     # Кодировка cp1251 для совместимости с Excel
     return csv_buffer.getvalue().encode('cp1251')
 
@@ -1526,7 +1590,13 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                csv_data = export_to_csv(df, analysis)
+                csv_data = export_to_csv(
+                    df, 
+                    analysis, 
+                    parser=st.session_state.parser,
+                    timeline_data=st.session_state.timeline_data,
+                    optimization_results=st.session_state.optimization_results
+                )
                 st.download_button(
                     label="📄 Скачать CSV",
                     data=csv_data,
