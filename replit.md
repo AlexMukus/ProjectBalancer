@@ -5,12 +5,27 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 
 ## Recent Changes (October 31, 2025)
 
-**Latest Bug Fixes (Export Functionality):**
+**Latest Enhancements (Smart Default Dates & Resource Filtering):**
+- **Default Date Range Logic**: Changed initialization from full project range to current week context:
+  - Start: current date - 7 days, rounded to Monday (weekday=0)
+  - End: current date + 14 days, rounded to Friday (weekday=4)
+  - Dates are clamped within project bounds to prevent `StreamlitAPIException`
+  - Provides focused 3-week analysis window by default
+- **Resource Filter Applied Globally**: selected_resources filter now affects ALL UI sections:
+  - Task details section (uses filtered display_data)
+  - Recommendations (filtered_analysis created with resource filtering)
+  - Workload distribution chart (uses filtered display_data)
+  - Optimization suggestions (selected_resources passed to optimize_with_task_shifting)
+  - Weekly timeline visualization (timeline_data filtered by keys)
+  - Interactive specialist replacement (uses filtered_analysis)
+- **Bug Fix**: Fixed date clamp logic to prevent defaults outside project_start...project_end bounds
+
+**Previous Bug Fixes (Export Functionality):**
 - Fixed `UnicodeEncodeError` in CSV export: Added `remove_emojis()` function to strip emoji symbols (🔴, 🟢) before cp1251 encoding, ensuring Excel compatibility
 - Fixed `KeyError: 'task'` in export functions: Updated CSV/PDF exporters to use correct optimization_results structure (`task_name`, `shift_days`, `improvement`, `reason`, `priority` instead of deprecated `task`, `action`, `details`)
 - Enhanced export data completeness: CSV/PDF now include 4 sections (summary, task details, weekly timeline, optimization suggestions) with proper field mapping
 
-**Critical Bug Fixes:**
+**Previous Critical Bug Fixes:**
 - Fixed `AttributeError: 'Figure' object has no attribute 'update_xaxis'` - replaced with correct Plotly methods: `update_xaxes()` and `update_yaxes()`
 - Optimized task shifting algorithm: weeks_with_dates construction moved to resource level (instead of repeating for each task)
 - Improved target week determination logic: now finds ALL overlapping weeks, selects the main one with the largest task proportion
@@ -19,7 +34,8 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 
 **End-to-End Testing:**
 - All core features working correctly
-- Verified: file upload, analysis, optimization, visualization, interactive replacement, CSV/PDF export with emoji sanitization and correct optimization schema
+- Verified: file upload, smart default dates, resource filtering across all sections (task details, recommendations, charts, optimization, timeline, interactive replacement)
+- Previous verifications: analysis, optimization, visualization, CSV/PDF export with emoji sanitization and correct optimization schema
 
 ## User Preferences
 Предпочитаемый стиль коммуникации: Простой, повседневный язык на русском.
