@@ -10,9 +10,9 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 
-# Page configuration
+# Конфигурация страницы
 st.set_page_config(
-    page_title="Resource Management Analyzer",
+    page_title="Анализатор управления ресурсами",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -119,7 +119,7 @@ st.markdown("""
 
 # MS Project XML Parser
 class MSProjectParser:
-    """Parser for MS Project XML files (.xml, .mspdi)"""
+    """Парсер для XML-файлов MS Project (.xml, .mspdi)"""
     
     def __init__(self, file_content):
         self.file_content = file_content
@@ -128,30 +128,30 @@ class MSProjectParser:
         self.assignments = []
         
     def parse(self):
-        """Parse MS Project XML file"""
+        """Парсинг XML-файла MS Project"""
         try:
             tree = etree.parse(io.BytesIO(self.file_content))
             root = tree.getroot()
             
-            # Get namespace
+            # Получение namespace
             namespace = {'ns': root.nsmap[None]} if None in root.nsmap else {}
             
-            # Parse resources
+            # Парсинг ресурсов
             self.resources = self._parse_resources(root, namespace)
             
-            # Parse tasks
+            # Парсинг задач
             self.tasks = self._parse_tasks(root, namespace)
             
-            # Parse assignments
+            # Парсинг назначений
             self.assignments = self._parse_assignments(root, namespace)
             
             return True
         except Exception as e:
-            st.error(f"Error parsing MS Project file: {str(e)}")
+            st.error(f"Ошибка при парсинге файла MS Project: {str(e)}")
             return False
     
     def _parse_resources(self, root, namespace):
-        """Parse resource information"""
+        """Парсинг информации о ресурсах"""
         resources = []
         resource_elements = root.findall('.//ns:Resource', namespace) if namespace else root.findall('.//Resource')
         
@@ -448,13 +448,13 @@ def export_to_csv(workload_df, analysis):
     return csv_buffer.getvalue()
 
 def export_to_pdf(workload_df, analysis, recommendations):
-    """Export analysis to PDF"""
+    """Экспорт анализа в PDF"""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     elements = []
     styles = getSampleStyleSheet()
     
-    # Title
+    # Заголовок
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -462,32 +462,32 @@ def export_to_pdf(workload_df, analysis, recommendations):
         textColor=colors.HexColor('#0078D4'),
         spaceAfter=30
     )
-    elements.append(Paragraph("Resource Workload Analysis Report", title_style))
+    elements.append(Paragraph("Отчёт по анализу рабочей нагрузки ресурсов", title_style))
     elements.append(Spacer(1, 0.2*inch))
     
-    # Summary
+    # Сводка
     summary_text = f"""
-    <b>Analysis Summary</b><br/>
-    Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}<br/>
-    Total Resources: {len(workload_df)}<br/>
-    Overloaded: {len(analysis['overloaded'])}<br/>
-    Optimal: {len(analysis['optimal'])}<br/>
-    Underutilized: {len(analysis['underutilized'])}
+    <b>Сводка анализа</b><br/>
+    Создано: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}<br/>
+    Всего ресурсов: {len(workload_df)}<br/>
+    Перегружено: {len(analysis['overloaded'])}<br/>
+    Оптимально: {len(analysis['optimal'])}<br/>
+    Недоиспользуется: {len(analysis['underutilized'])}
     """
     elements.append(Paragraph(summary_text, styles['Normal']))
     elements.append(Spacer(1, 0.3*inch))
     
-    # Workload table
-    table_data = [['Resource', 'Allocated', 'Capacity', 'Workload %', 'Tasks', 'Status']]
+    # Таблица рабочей нагрузки
+    table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Нагрузка %', 'Задачи', 'Статус']]
     
     for _, row in workload_df.iterrows():
-        status = 'Overloaded' if row['Workload %'] > 100 else ('Optimal' if row['Workload %'] >= 70 else 'Underutilized')
+        status = 'Перегружен' if row['Нагрузка %'] > 100 else ('Оптимально' if row['Нагрузка %'] >= 70 else 'Недоиспользуется')
         table_data.append([
-            row['Resource Name'],
-            f"{row['Allocated Hours']:.1f}h",
-            f"{row['Capacity Hours']:.1f}h",
-            f"{row['Workload %']:.1f}%",
-            str(row['Task Count']),
+            row['Имя ресурса'],
+            f"{row['Выделено часов']:.1f}ч",
+            f"{row['Ёмкость часов']:.1f}ч",
+            f"{row['Нагрузка %']:.1f}%",
+            str(row['Кол-во задач']),
             status
         ])
     
@@ -506,13 +506,16 @@ def export_to_pdf(workload_df, analysis, recommendations):
     elements.append(table)
     elements.append(Spacer(1, 0.3*inch))
     
-    # Recommendations
+    # Рекомендации
     if recommendations:
-        elements.append(Paragraph("<b>Recommendations</b>", styles['Heading2']))
+        elements.append(Paragraph("<b>Рекомендации</b>", styles['Heading2']))
         for i, rec in enumerate(recommendations[:10], 1):
-            rec_text = f"{i}. {rec.get('type', 'N/A')}"
-            if 'from' in rec:
-                rec_text += f" - Move {rec['hours']:.1f}h from {rec['from']} to {rec['to']}"
+            if rec['type'] == 'Reassign Tasks':
+                rec_text = f"{i}. Перераспределить задачи - Перенести {rec['hours']:.1f}ч от {rec['from']} к {rec['to']}"
+            elif rec['type'] == 'Hire Additional Resources':
+                rec_text = f"{i}. Нанять дополнительные ресурсы для {rec['resource']}: {rec['reason']}"
+            else:
+                rec_text = f"{i}. Увеличить использование {rec['resource']}: {rec['available_capacity']}"
             elements.append(Paragraph(rec_text, styles['Normal']))
     
     doc.build(elements)
@@ -529,31 +532,31 @@ if 'parser' not in st.session_state:
 
 # Main application
 def main():
-    # Header
+    # Заголовок
     st.markdown("""
-        <h1 style='color: #0078D4; margin-bottom: 10px;'>📊 Resource Management Analyzer</h1>
+        <h1 style='color: #0078D4; margin-bottom: 10px;'>📊 Анализатор управления ресурсами</h1>
         <p style='color: #323130; font-size: 16px; margin-bottom: 30px;'>
-            Analyze Microsoft Project files to identify workload imbalances and optimize resource allocation
+            Анализируйте файлы Microsoft Project для выявления дисбаланса рабочей нагрузки и оптимизации распределения ресурсов
         </p>
     """, unsafe_allow_html=True)
     
-    # Sidebar
+    # Боковая панель
     with st.sidebar:
-        st.markdown("### 📁 Upload MS Project File")
-        st.markdown("Supported formats: .xml, .mspdi")
-        st.info("💡 To export .mpp to XML: In MS Project, go to File → Save As → select XML Format (*.xml)")
+        st.markdown("### 📁 Загрузка файла MS Project")
+        st.markdown("Поддерживаемые форматы: .xml, .mspdi")
+        st.info("💡 Чтобы экспортировать .mpp в XML: в MS Project выберите Файл → Сохранить как → выберите Формат XML (*.xml)")
         
         uploaded_file = st.file_uploader(
-            "Choose file",
+            "Выберите файл",
             type=['xml', 'mspdi'],
-            help="Upload your Microsoft Project XML file"
+            help="Загрузите ваш XML-файл Microsoft Project"
         )
         
         if uploaded_file:
-            st.success(f"✓ {uploaded_file.name} loaded")
+            st.success(f"✓ {uploaded_file.name} загружен")
             
-            if st.button("🔄 Parse File", use_container_width=True):
-                with st.spinner("Parsing MS Project file..."):
+            if st.button("🔄 Анализировать файл", use_container_width=True):
+                with st.spinner("Анализ файла MS Project..."):
                     file_content = uploaded_file.read()
                     parser = MSProjectParser(file_content)
                     
@@ -561,104 +564,104 @@ def main():
                         st.session_state.parser = parser
                         st.session_state.workload_data = parser.get_resource_workload_data()
                         st.session_state.analysis = analyze_workload(st.session_state.workload_data)
-                        st.success("✓ File parsed successfully!")
+                        st.success("✓ Файл успешно проанализирован!")
                         st.rerun()
                     else:
-                        st.error("Failed to parse file")
+                        st.error("Не удалось проанализировать файл")
         
         st.markdown("---")
-        st.markdown("### ℹ️ About")
+        st.markdown("### ℹ️ О программе")
         st.markdown("""
-        This tool helps you:
-        - Identify overloaded resources (>100%)
-        - Find underutilized capacity (<70%)
-        - Get workload balancing recommendations
-        - Export analysis reports
+        Этот инструмент помогает:
+        - Выявить перегруженные ресурсы (>100%)
+        - Найти недоиспользованные мощности (<70%)
+        - Получить рекомендации по балансировке нагрузки
+        - Экспортировать отчёты анализа
         """)
     
-    # Main content
+    # Основной контент
     if st.session_state.workload_data is None:
-        # Welcome screen
-        st.info("👆 Upload a Microsoft Project XML file to begin analysis")
+        # Экран приветствия
+        st.info("👆 Загрузите XML-файл Microsoft Project для начала анализа")
         
         col1, col2, col3 = st.columns(3)
         
         with col1:
             st.markdown("""
                 <div class='metric-card'>
-                    <h3 style='color: #FF4B4B;'>Identify Overload</h3>
-                    <p>Detect resources working above 100% capacity</p>
+                    <h3 style='color: #FF4B4B;'>Выявление перегрузки</h3>
+                    <p>Определение ресурсов с нагрузкой более 100%</p>
                 </div>
             """, unsafe_allow_html=True)
         
         with col2:
             st.markdown("""
                 <div class='metric-card'>
-                    <h3 style='color: #107C10;'>Optimize Allocation</h3>
-                    <p>Get recommendations for better resource distribution</p>
+                    <h3 style='color: #107C10;'>Оптимизация распределения</h3>
+                    <p>Рекомендации по улучшению распределения ресурсов</p>
                 </div>
             """, unsafe_allow_html=True)
         
         with col3:
             st.markdown("""
                 <div class='metric-card'>
-                    <h3 style='color: #0078D4;'>Export Reports</h3>
-                    <p>Download analysis as CSV or PDF</p>
+                    <h3 style='color: #0078D4;'>Экспорт отчётов</h3>
+                    <p>Скачайте анализ в формате CSV или PDF</p>
                 </div>
             """, unsafe_allow_html=True)
         
-        st.markdown("### 📋 Sample Analysis Preview")
-        st.markdown("Upload your file to see detailed resource analysis with:")
-        st.markdown("- Color-coded workload indicators")
-        st.markdown("- Task assignments per resource")
-        st.markdown("- Actionable recommendations")
-        st.markdown("- Summary statistics")
+        st.markdown("### 📋 Пример анализа")
+        st.markdown("Загрузите файл, чтобы увидеть подробный анализ ресурсов с:")
+        st.markdown("- Цветными индикаторами рабочей нагрузки")
+        st.markdown("- Назначениями задач по ресурсам")
+        st.markdown("- Практическими рекомендациями")
+        st.markdown("- Сводной статистикой")
         
     else:
-        # Display analysis
+        # Отображение анализа
         workload_data = st.session_state.workload_data
         analysis = st.session_state.analysis
         
-        # Summary metrics
-        st.markdown("### 📊 Summary Dashboard")
+        # Сводные метрики
+        st.markdown("### 📊 Панель управления")
         
-        # Get project duration info
+        # Получение информации о длительности проекта
         project_weeks = workload_data[0]['project_weeks'] if workload_data else 4
         
         col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
-            st.metric("Total Resources", len(workload_data))
+            st.metric("Всего ресурсов", len(workload_data))
         
         with col2:
-            st.metric("Project Duration", f"{project_weeks:.1f} weeks")
+            st.metric("Длительность проекта", f"{project_weeks:.1f} нед.")
         
         with col3:
-            st.metric("Overloaded", len(analysis['overloaded']), 
+            st.metric("Перегружено", len(analysis['overloaded']), 
                      delta=f"{len(analysis['overloaded'])}" if len(analysis['overloaded']) > 0 else None,
                      delta_color="inverse")
         
         with col4:
-            st.metric("Optimal", len(analysis['optimal']),
+            st.metric("Оптимально", len(analysis['optimal']),
                      delta_color="off")
         
         with col5:
-            st.metric("Underutilized", len(analysis['underutilized']),
+            st.metric("Недоиспользуется", len(analysis['underutilized']),
                      delta=f"{len(analysis['underutilized'])}" if len(analysis['underutilized']) > 0 else None,
                      delta_color="normal")
         
         st.markdown("---")
         
-        # Personnel search
-        st.markdown("### 🔍 Filter by Personnel")
+        # Поиск персонала
+        st.markdown("### 🔍 Фильтр по персоналу")
         all_names = [item['resource_name'] for item in workload_data]
         
         col1, col2 = st.columns([3, 1])
         with col1:
-            search_term = st.text_input("Search by surname or name:", placeholder="e.g., Smith")
+            search_term = st.text_input("Поиск по фамилии или имени:", placeholder="например, Иванов")
         with col2:
             st.markdown("<br>", unsafe_allow_html=True)
-            show_all = st.checkbox("Show All", value=True)
+            show_all = st.checkbox("Показать всех", value=True)
         
         # Filter data
         if show_all or not search_term:
@@ -668,11 +671,11 @@ def main():
                            if search_term.lower() in item['resource_name'].lower()]
         
         if not filtered_data:
-            st.warning("No resources found matching your search.")
+            st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
         else:
-            # Multi-select
+            # Множественный выбор
             selected_resources = st.multiselect(
-                "Select specific resources to analyze:",
+                "Выберите конкретные ресурсы для анализа:",
                 options=[item['resource_name'] for item in filtered_data],
                 default=[item['resource_name'] for item in filtered_data]
             )
@@ -683,66 +686,66 @@ def main():
             else:
                 display_data = filtered_data
             
-            # Workload analysis table
-            st.markdown("### 📈 Workload Analysis")
+            # Таблица анализа рабочей нагрузки
+            st.markdown("### 📈 Анализ рабочей нагрузки")
             
-            # Prepare dataframe
+            # Подготовка датафрейма
             df_data = []
             for item in display_data:
                 percentage = item['workload_percentage']
                 
-                # Status indicator
+                # Индикатор статуса
                 if percentage > 100:
-                    status = "🔴 Overloaded"
+                    status = "🔴 Перегружен"
                     status_color = "#FF4B4B"
                 elif percentage >= 70:
-                    status = "🟢 Optimal"
+                    status = "🟢 Оптимально"
                     status_color = "#107C10"
                 else:
-                    status = "🟡 Underutilized"
+                    status = "🟡 Недоиспользуется"
                     status_color = "#FFB900"
                 
                 df_data.append({
-                    'Resource Name': item['resource_name'],
-                    'Allocated Hours': item['total_work_hours'],
-                    'Capacity Hours': item['max_capacity'],
-                    'Workload %': percentage,
-                    'Task Count': item['task_count'],
-                    'Status': status
+                    'Имя ресурса': item['resource_name'],
+                    'Выделено часов': item['total_work_hours'],
+                    'Ёмкость часов': item['max_capacity'],
+                    'Нагрузка %': percentage,
+                    'Кол-во задач': item['task_count'],
+                    'Статус': status
                 })
             
             df = pd.DataFrame(df_data)
             
-            # Color the dataframe
+            # Раскраска датафрейма
             def highlight_workload(row):
-                if row['Workload %'] > 100:
+                if row['Нагрузка %'] > 100:
                     return ['background-color: #FFE5E5'] * len(row)
-                elif row['Workload %'] < 70:
+                elif row['Нагрузка %'] < 70:
                     return ['background-color: #FFF4E5'] * len(row)
                 else:
                     return ['background-color: #E5F5E5'] * len(row)
             
             styled_df = df.style.apply(highlight_workload, axis=1).format({
-                'Allocated Hours': '{:.1f}',
-                'Capacity Hours': '{:.1f}',
-                'Workload %': '{:.1f}%'
+                'Выделено часов': '{:.1f}',
+                'Ёмкость часов': '{:.1f}',
+                'Нагрузка %': '{:.1f}%'
             })
             
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
             
-            # Detailed task breakdown
-            st.markdown("### 📋 Task Breakdown")
+            # Детализация задач
+            st.markdown("### 📋 Детализация задач")
             
             for item in display_data:
-                with st.expander(f"{item['resource_name']} - {item['workload_percentage']:.1f}% workload"):
+                with st.expander(f"{item['resource_name']} - {item['workload_percentage']:.1f}% нагрузка"):
                     if item['tasks']:
                         task_df = pd.DataFrame(item['tasks'])
                         st.dataframe(task_df, use_container_width=True, hide_index=True)
                     else:
-                        st.info("No tasks assigned")
+                        st.info("Задачи не назначены")
             
-            # Recommendations
-            st.markdown("### 💡 Recommendations")
+            # Рекомендации
+            st.markdown("### 💡 Рекомендации")
             
             recommendations = generate_recommendations(analysis)
             
@@ -754,55 +757,61 @@ def main():
                         'Low': '#107C10'
                     }.get(rec.get('priority', 'Low'), '#107C10')
                     
+                    priority_text = {
+                        'High': 'Высокий приоритет',
+                        'Medium': 'Средний приоритет',
+                        'Low': 'Низкий приоритет'
+                    }.get(rec.get('priority', 'Low'), 'Низкий приоритет')
+                    
                     if rec['type'] == 'Reassign Tasks':
                         st.markdown(f"""
                         <div style='background-color: white; padding: 15px; border-radius: 8px; 
                                     margin: 10px 0; border-left: 4px solid {priority_color}'>
-                            <b>{i}. {rec['type']}</b> 
+                            <b>{i}. Перераспределить задачи</b> 
                             <span style='background-color: {priority_color}; color: white; 
                                          padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                {rec['priority']} Priority
+                                {priority_text}
                             </span><br/>
-                            Move <b>{rec['hours']:.1f} hours</b> of work from 
-                            <b>{rec['from']}</b> to <b>{rec['to']}</b>
+                            Перенести <b>{rec['hours']:.1f} часов</b> работы от 
+                            <b>{rec['from']}</b> к <b>{rec['to']}</b>
                         </div>
                         """, unsafe_allow_html=True)
                     elif rec['type'] == 'Hire Additional Resources':
                         st.markdown(f"""
                         <div style='background-color: white; padding: 15px; border-radius: 8px; 
                                     margin: 10px 0; border-left: 4px solid {priority_color}'>
-                            <b>{i}. {rec['type']}</b>
+                            <b>{i}. Нанять дополнительные ресурсы</b>
                             <span style='background-color: {priority_color}; color: white; 
                                          padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                {rec['priority']} Priority
+                                {priority_text}
                             </span><br/>
-                            Consider hiring additional resources to support <b>{rec['resource']}</b><br/>
-                            Reason: {rec['reason']}
+                            Рассмотрите найм дополнительных ресурсов для поддержки <b>{rec['resource']}</b><br/>
+                            Причина: {rec['reason']}
                         </div>
                         """, unsafe_allow_html=True)
                     else:
                         st.markdown(f"""
                         <div style='background-color: white; padding: 15px; border-radius: 8px; 
                                     margin: 10px 0; border-left: 4px solid {priority_color}'>
-                            <b>{i}. {rec['type']}</b>
+                            <b>{i}. Увеличить использование</b>
                             <span style='background-color: {priority_color}; color: white; 
                                          padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                {rec['priority']} Priority
+                                {priority_text}
                             </span><br/>
-                            <b>{rec['resource']}</b> has {rec['available_capacity']} available capacity
+                            <b>{rec['resource']}</b> имеет {rec['available_capacity']} доступной мощности
                         </div>
                         """, unsafe_allow_html=True)
             else:
-                st.success("✓ All resources are optimally allocated!")
+                st.success("✓ Все ресурсы распределены оптимально!")
             
-            # Export options
-            st.markdown("### 📥 Export Analysis")
+            # Опции экспорта
+            st.markdown("### 📥 Экспорт анализа")
             col1, col2 = st.columns(2)
             
             with col1:
                 csv_data = export_to_csv(df, analysis)
                 st.download_button(
-                    label="📄 Download CSV",
+                    label="📄 Скачать CSV",
                     data=csv_data,
                     file_name=f"resource_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
@@ -812,15 +821,15 @@ def main():
             with col2:
                 pdf_data = export_to_pdf(df, analysis, recommendations)
                 st.download_button(
-                    label="📑 Download PDF",
+                    label="📑 Скачать PDF",
                     data=pdf_data,
                     file_name=f"resource_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                     mime="application/pdf",
                     use_container_width=True
                 )
             
-            # Visualization
-            st.markdown("### 📊 Workload Distribution")
+            # Визуализация
+            st.markdown("### 📊 Распределение рабочей нагрузки")
             
             fig = go.Figure()
             
@@ -844,16 +853,16 @@ def main():
                 hovertemplate='<b>%{x}</b><br>Workload: %{y:.1f}%<br><extra></extra>'
             ))
             
-            # Add threshold lines
+            # Добавление пороговых линий
             fig.add_hline(y=100, line_dash="dash", line_color="#FF4B4B", 
-                         annotation_text="100% Capacity", annotation_position="right")
+                         annotation_text="100% ёмкость", annotation_position="right")
             fig.add_hline(y=70, line_dash="dash", line_color="#FFB900", 
-                         annotation_text="70% Threshold", annotation_position="right")
+                         annotation_text="70% порог", annotation_position="right")
             
             fig.update_layout(
-                title="Resource Workload Comparison",
-                xaxis_title="Resource",
-                yaxis_title="Workload Percentage (%)",
+                title="Сравнение рабочей нагрузки ресурсов",
+                xaxis_title="Ресурс",
+                yaxis_title="Процент нагрузки (%)",
                 showlegend=False,
                 height=500,
                 plot_bgcolor='white',

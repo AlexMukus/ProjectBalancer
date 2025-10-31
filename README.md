@@ -1,102 +1,102 @@
-# Resource Management Analyzer
+# Анализатор управления ресурсами
 
-A professional desktop-based application for analyzing Microsoft Project plan files to identify workload imbalances and provide optimization recommendations.
+Профессиональное настольное приложение для анализа файлов планов Microsoft Project с целью выявления дисбаланса рабочей нагрузки и предоставления рекомендаций по оптимизации.
 
-## Features
+## Возможности
 
-- **MS Project File Support**: Upload and parse Microsoft Project XML files (.xml, .mspdi)
-- **Intelligent Workload Calculation**: Analyzes resource allocation based on actual project timelines and resource capacity
-- **Personnel Search**: Filter and search tasks by resource names and surnames
-- **Visual Analysis**: Color-coded status indicators for quick identification of resource issues
-  - 🔴 Red: Overloaded (>100% capacity)
-  - 🟢 Green: Optimal (70-100% capacity)
-  - 🟡 Yellow: Underutilized (<70% capacity)
-- **Smart Recommendations**: Actionable suggestions for workload balancing
-- **Export Options**: Download analysis as CSV or PDF reports
+- **Поддержка файлов MS Project**: Загрузка и парсинг XML-файлов Microsoft Project (.xml, .mspdi)
+- **Интеллектуальный расчёт рабочей нагрузки**: Анализ распределения ресурсов на основе фактических сроков проекта и мощности ресурсов
+- **Поиск персонала**: Фильтрация и поиск задач по именам и фамилиям ресурсов
+- **Визуальный анализ**: Цветные индикаторы статуса для быстрого выявления проблем с ресурсами
+  - 🔴 Красный: Перегружен (>100% мощности)
+  - 🟢 Зелёный: Оптимально (70-100% мощности)
+  - 🟡 Жёлтый: Недоиспользуется (<70% мощности)
+- **Умные рекомендации**: Практические предложения по балансировке рабочей нагрузки
+- **Варианты экспорта**: Скачивание анализа в формате CSV или PDF
 
-## How to Use
+## Как использовать
 
-### 1. Prepare Your MS Project File
+### 1. Подготовка файла MS Project
 
-If you have a .mpp file, convert it to XML format:
-1. Open your project in Microsoft Project
-2. Go to **File → Save As**
-3. Select **XML Format (*.xml)** as the file type
-4. Save the file
+Если у вас есть файл .mpp, конвертируйте его в формат XML:
+1. Откройте ваш проект в Microsoft Project
+2. Перейдите в **Файл → Сохранить как**
+3. Выберите **Формат XML (*.xml)** в качестве типа файла
+4. Сохраните файл
 
-### 2. Upload and Analyze
+### 2. Загрузка и анализ
 
-1. Click "Choose file" in the sidebar
-2. Select your MS Project XML file
-3. Click "Parse File" to analyze the data
-4. Review the workload analysis dashboard
+1. Нажмите "Выберите файл" на боковой панели
+2. Выберите ваш XML-файл MS Project
+3. Нажмите "Анализировать файл" для анализа данных
+4. Просмотрите панель анализа рабочей нагрузки
 
-### 3. Filter and Search
+### 3. Фильтрация и поиск
 
-- Use the search box to filter resources by name or surname
-- Select specific resources using the multi-select dropdown
-- Expand individual resources to see detailed task breakdowns
+- Используйте поле поиска для фильтрации ресурсов по имени или фамилии
+- Выберите конкретные ресурсы с помощью выпадающего списка множественного выбора
+- Разверните отдельные ресурсы для просмотра детальной разбивки задач
 
-### 4. Review Recommendations
+### 4. Просмотр рекомендаций
 
-The system provides prioritized recommendations:
-- **High Priority**: Resources over 120% capacity
-- **Medium Priority**: Resources between 100-120% capacity
-- **Low Priority**: Optimization suggestions for underutilized resources
+Система предоставляет приоритизированные рекомендации:
+- **Высокий приоритет**: Ресурсы с нагрузкой более 120%
+- **Средний приоритет**: Ресурсы с нагрузкой 100-120%
+- **Низкий приоритет**: Предложения по оптимизации недоиспользуемых ресурсов
 
-### 5. Export Results
+### 5. Экспорт результатов
 
-Download your analysis as:
-- **CSV**: For further analysis in Excel or other tools
-- **PDF**: Professional report for presentations
+Скачайте ваш анализ в виде:
+- **CSV**: Для дальнейшего анализа в Excel или других инструментах
+- **PDF**: Профессиональный отчёт для презентаций
 
-## Workload Calculation
+## Расчёт рабочей нагрузки
 
-The application calculates workload percentages based on:
+Приложение рассчитывает процент рабочей нагрузки на основе:
 
-- **Project Duration**: Automatically detected from task start/end dates
-- **Resource Capacity**: Based on MaxUnits and standard 40-hour work weeks (5 days × 8 hours)
-- **Task Assignments**: Total hours allocated to each resource
+- **Длительности проекта**: Автоматически определяется из дат начала/окончания задач
+- **Мощности ресурса**: На основе MaxUnits и стандартной 40-часовой рабочей недели (5 дней × 8 часов)
+- **Назначений задач**: Общее количество часов, выделенных каждому ресурсу
 
-**Capacity Model**:
-- Calendar days are converted to workdays using a 5/7 ratio (assuming 5-day work week)
-- Each workday provides 8 hours of working capacity (matching MS Project's P1D = 8 hours)
-- Resource capacity = Available work hours × MaxUnits
+**Модель мощности**:
+- Календарные дни конвертируются в рабочие дни с использованием соотношения 5/7 (5-дневная рабочая неделя)
+- Каждый рабочий день предоставляет 8 часов рабочей мощности (соответствует P1D = 8 часов в MS Project)
+- Мощность ресурса = Доступные рабочие часы × MaxUnits
 
-**Formula**: `Workload % = (Total Assigned Hours / Capacity) × 100`
+**Формула**: `Нагрузка % = (Общее количество назначенных часов / Мощность) × 100`
 
-**Examples** (for MaxUnits = 1.0):
-- 1 calendar day → 0.71 workdays → 5.71 work hours capacity
-- 7 calendar days → 5 workdays → 40 work hours capacity
-- 28 calendar days → 20 workdays → 160 work hours capacity
+**Примеры** (для MaxUnits = 1.0):
+- 1 календарный день → 0.71 рабочих дней → 5.71 рабочих часов мощности
+- 7 календарных дней → 5 рабочих дней → 40 рабочих часов мощности
+- 28 календарных дней → 20 рабочих дней → 160 рабочих часов мощности
 
-## Color Scheme
+## Цветовая схема
 
-Following Microsoft Project design guidelines:
-- Primary Blue: #0078D4
-- Success Green: #107C10
-- Warning Red: #FF4B4B
-- Background Grey: #F3F2F1
-- Text Charcoal: #323130
+В соответствии с руководством по дизайну Microsoft Project:
+- Основной синий: #0078D4
+- Зелёный успеха: #107C10
+- Красный предупреждения: #FF4B4B
+- Серый фона: #F3F2F1
+- Угольный текст: #323130
 
-## Sample Data
+## Образец данных
 
-A sample project file (`sample_project.xml`) is included for testing. It demonstrates:
-- 5 resources with varying workloads
-- 8 tasks with different durations
-- Resource assignments showing overload and underutilization scenarios
+Образец файла проекта (`sample_project.xml`) включён для тестирования. Он демонстрирует:
+- 5 ресурсов с различной рабочей нагрузкой
+- 8 задач с разной длительностью
+- Назначения ресурсов, показывающие сценарии перегрузки и недоиспользования
 
-## Technical Details
+## Технические детали
 
-- Built with Streamlit for interactive web interface
-- Uses lxml for robust XML parsing
-- Plotly for interactive visualizations
-- ReportLab for PDF generation
-- Pandas for data manipulation
+- Построен на Streamlit для интерактивного веб-интерфейса
+- Использует lxml для надёжного парсинга XML
+- Plotly для интерактивных визуализаций
+- ReportLab для генерации PDF
+- Pandas для обработки данных
 
-## Support
+## Поддержка
 
-For issues with:
-- **File parsing**: Ensure your XML file is properly formatted MS Project export
-- **Date calculations**: Verify that tasks have valid Start and Finish dates
-- **Missing resources**: Check that resources are properly assigned in the source project
+При проблемах с:
+- **Парсингом файлов**: Убедитесь, что ваш XML-файл правильно отформатирован как экспорт MS Project
+- **Расчётами дат**: Проверьте, что задачи имеют корректные даты начала и окончания
+- **Отсутствующими ресурсами**: Проверьте, что ресурсы правильно назначены в исходном проекте
