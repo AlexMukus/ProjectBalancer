@@ -5,25 +5,25 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 
 ## Recent Changes (October 31, 2025)
 
-**Latest UI Enhancement (Dual Design System - October 31, 2025):**
-- **Theme Switching System**: Implemented switchable design system with two themes:
-  - **Fluent UI (классика)**: Original Microsoft-inspired design preserved as fallback
-    - Colors: Primary #0078D4, Error #FF4B4B, Success #107C10, Warning #FFB900
-    - Traditional card-based metrics and clean, flat styling
-  - **Material Design 3 (современный)**: Google's MD3 design system
-    - Palette generated from seed color #0078D4 for visual continuity
-    - Colors: Primary #005EB0, Error #BA1A1A, Tertiary #6D5677, Surface #FEF7FF
-    - Elevated cards with rounded corners (12px), enhanced shadows, and modern typography
-- **Architecture**: Modular component system with clean separation:
-  - `fluent_ui_components.py`: Fluent UI CSS and legacy styling
-  - `md3_components.py`: MD3 palette, typography scales, and HTML components
-  - Conditional rendering in `app.py` based on `st.session_state.theme`
-- **Theme-Aware Components**:
-  - Control panel: MD3 uses custom `md3_info_panel()` with elevated metric cards
-  - Analysis table: MD3 applies `md3_table_style()` with alternating rows and hover effects
-  - Plotly charts: Dynamic color mapping (Fluent red/green/yellow vs MD3 error/primary/tertiary)
-- **User Experience**: Radio button in sidebar triggers automatic page reload (st.rerun) with full state persistence
-- **Testing**: E2E verified both themes work correctly with seamless switching and consistent functionality
+**Latest Enhancement (Display Mode Switcher - October 31, 2025):**
+- **Display Mode Toggle**: Added switchable display mode for workload visualization with two options:
+  - **В процентах (Percentage mode)**: Default mode showing workload as percentage of capacity
+    - Analysis table column: "Нагрузка %" with values like "85.5%"
+    - Chart Y-axis: "Процент нагрузки (%)"
+    - Threshold lines: 100% (overloaded) and 70% (underutilized)
+  - **В часах (Hours mode)**: Shows workload in absolute hours
+    - Analysis table column: "Загрузка (часы)" with values like "68.4 ч."
+    - Chart Y-axis: "Загрузка (часы)"
+    - Threshold lines: calculated based on average capacity per resource
+- **Implementation Details**:
+  - Radio button control in sidebar: "Отображение загрузки"
+  - Mode stored in `st.session_state.display_mode` ('percentage' or 'hours')
+  - Triggers automatic page reload (st.rerun) with full state persistence
+  - Affects all visualization components: analysis table, workload distribution chart, weekly timeline chart
+- **Export Support**: CSV and PDF export functions updated to handle both display modes
+  - Status determination based on percentage calculation regardless of display mode
+  - Column headers and values adapt to selected mode
+- **Testing**: E2E verified both modes work correctly with seamless switching across all components
 
 **Previous Enhancements (Resource Groups, Period Analytics & Actual Hours):**
 - **Resource Groups Management**: Added complete workflow for managing custom resource groups:
@@ -89,11 +89,17 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 ### UI/UX Decisions
 The application uses Streamlit for rapid prototyping and interactive data visualization. Plotly is utilized for interactive, professional-grade charts, enabling rich interactivity like hovering, zooming, and panning. 
 
-**Design System**: The application supports two switchable themes via radio button in sidebar:
-- **Fluent UI (классика)**: Microsoft-inspired design with custom CSS injection, incorporating a Red/Yellow/Green color-coding system for quick visual assessment and a card-based layout for metrics.
-- **Material Design 3 (современный)**: Google's MD3 design system with elevated cards, rounded corners, modern typography, and a purple-blue color palette generated from seed color #0078D4.
+**Design System**: The application uses Material Design 3 (MD3) as its single design system:
+- **Material Design 3**: Google's MD3 design system with elevated cards, rounded corners, modern typography, and a purple-blue color palette generated from seed color #0078D4
+  - Colors: Primary #005EB0, Error #BA1A1A, Tertiary #6D5677, Surface #FEF7FF
+  - Modular components defined in `md3_components.py`
+  - Elevated metric cards, alternating row styles, and hover effects
+  - Red/Yellow/Green color-coding system for workload status (overloaded/underutilized/optimal)
 
-Theme selection persists in `st.session_state.theme` and triggers automatic page reload with full state preservation. Components are rendered conditionally based on the active theme using modular helpers from `fluent_ui_components.py` and `md3_components.py`.
+**Display Modes**: Users can switch between two display modes for workload visualization:
+- **В процентах (Percentage)**: Shows workload as percentage of capacity (default)
+- **В часах (Hours)**: Shows workload in absolute hours
+- Mode selection stored in `st.session_state.display_mode` and triggers automatic page reload with full state preservation
 
 ### Technical Implementations
 The backend processes MS Project XML files using `lxml` for robust parsing, handling large files efficiently. Data manipulation and complex resource allocation calculations are performed using Pandas DataFrames.
