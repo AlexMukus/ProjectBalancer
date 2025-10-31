@@ -1383,12 +1383,26 @@ def main():
             help="Загрузите ваш XML-файл Microsoft Project"
         )
         
-        if uploaded_file:
-            st.success(f"✓ {uploaded_file.name} загружен")
+        # Сохранить содержимое файла как байты для надежности при st.rerun()
+        if uploaded_file is not None:
+            st.session_state.uploaded_file_content = uploaded_file.getvalue()
+            st.session_state.uploaded_file_name = uploaded_file.name
+        
+        # Проверить наличие загруженного файла
+        has_file = (uploaded_file is not None) or ('uploaded_file_content' in st.session_state)
+        
+        if has_file:
+            file_name = uploaded_file.name if uploaded_file is not None else st.session_state.get('uploaded_file_name', 'файл')
+            st.success(f"✓ {file_name} загружен")
             
             if st.button("🔄 Анализировать файл", use_container_width=True):
                 with st.spinner("Анализ файла MS Project..."):
-                    file_content = uploaded_file.read()
+                    # Использовать сохраненное содержимое или прочитать новый файл
+                    if uploaded_file is not None:
+                        file_content = uploaded_file.getvalue()
+                    else:
+                        file_content = st.session_state.uploaded_file_content
+                    
                     parser = MSProjectParser(file_content)
                     
                     if parser.parse():
