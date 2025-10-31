@@ -609,7 +609,7 @@ def analyze_workload(workload_data):
     
     return analysis
 
-def optimize_with_task_shifting(parser, settings, date_range_start=None, date_range_end=None):
+def optimize_with_task_shifting(parser, settings, date_range_start=None, date_range_end=None, selected_resources=None):
     """
     Оптимизация распределения с смещением задач во времени
     
@@ -623,6 +623,7 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
             }
         date_range_start: Начало анализируемого периода (datetime.date or None)
         date_range_end: Конец анализируемого периода (datetime.date or None)
+        selected_resources: Список выбранных ресурсов для оптимизации (list or None)
     """
     max_shift = settings.get('max_shift_days', 14)
     target_load = settings.get('target_load', 85)
@@ -636,6 +637,9 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
     optimization_suggestions = []
     
     for resource_name, weekly_loads in timeline_data.items():
+        # Фильтрация по выбранным ресурсам
+        if selected_resources and resource_name not in selected_resources:
+            continue
         # Найти перегруженные и недозагруженные недели
         overloaded_weeks = {}
         underloaded_weeks = {}
@@ -1279,11 +1283,33 @@ def main():
                     
                     if parser.parse():
                         st.session_state.parser = parser
-                        # Инициализировать даты проекта
+                        # Инициализировать даты проекта на основе текущей даты
+                        today = datetime.now().date()
+                        
+                        # Получить даты проекта для ограничения
                         project_start, project_end = parser.get_project_dates()
+                        
+                        # Начало: текущая дата - 7 дней, округленная до понедельника
+                        start_candidate = today - timedelta(days=7)
+                        days_since_monday = start_candidate.weekday()
+                        default_start = start_candidate - timedelta(days=days_since_monday)
+                        
+                        # Конец: текущая дата + 14 дней, округленная до пятницы
+                        end_candidate = today + timedelta(days=14)
+                        days_until_friday = (4 - end_candidate.weekday()) % 7
+                        default_end = end_candidate + timedelta(days=days_until_friday)
+                        
+                        # Ограничить даты в пределах проекта
                         if project_start and project_end:
-                            st.session_state.date_range_start = project_start.date()
-                            st.session_state.date_range_end = project_end.date()
+                            project_start_date = project_start.date()
+                            project_end_date = project_end.date()
+                            default_start = max(default_start, project_start_date)
+                            default_start = min(default_start, project_end_date)
+                            default_end = max(default_end, project_start_date)
+                            default_end = min(default_end, project_end_date)
+                        
+                        st.session_state.date_range_start = default_start
+                        st.session_state.date_range_end = default_end
                         # Рассчитать данные с учетом выбранного диапазона
                         st.session_state.workload_data = parser.get_resource_workload_data(
                             st.session_state.date_range_start,
@@ -1519,7 +1545,17 @@ def main():
             # Рекомендации
             st.markdown("### 💡 Рекомендации")
             
-            recommendations = generate_recommendations(analysis)
+            # Фильтрация analysis по выбранным ресурсам
+            if selected_resources:
+                filtered_analysis = {
+                    'overloaded': [r for r in analysis['overloaded'] if r['resource_name'] in selected_resources],
+                    'optimal': [r for r in analysis['optimal'] if r['resource_name'] in selected_resources],
+                    'underutilized': [r for r in analysis['underutilized'] if r['resource_name'] in selected_resources]
+                }
+            else:
+                filtered_analysis = analysis
+            
+            recommendations = generate_recommendations(filtered_analysis)
             
             if recommendations:
                 for i, rec in enumerate(recommendations, 1):
@@ -1620,7 +1656,8 @@ def main():
                             st.session_state.parser, 
                             optimization_settings,
                             st.session_state.date_range_start,
-                            st.session_state.date_range_end
+                            st.session_state.date_range_end,
+                            selected_resources
                         )
                         st.session_state.timeline_data = st.session_state.parser.get_timeline_workload(
                             st.session_state.date_range_start,
@@ -1667,7 +1704,11 @@ def main():
             if st.session_state.timeline_data:
                 st.markdown("### 📅 Временная загрузка ресурсов по неделям")
                 
-                timeline_data = st.session_state.timeline_data
+                # Фильтрация timeline_data по выбранным ресурсам
+                if selected_resources:
+                    timeline_data = {k: v for k, v in st.session_state.timeline_data.items() if k in selected_resources}
+                else:
+                    timeline_data = st.session_state.timeline_data
                 
                 # Выбор ресурса для детальной визуализации
                 selected_resource_timeline = st.selectbox(
@@ -1726,12 +1767,12 @@ def main():
                     st.plotly_chart(fig_timeline, use_container_width=True)
             
             # Интерактивная замена специалистов
-            if analysis['overloaded']:
+            if filtered_analysis['overloaded']:
                 st.markdown("---")
                 st.markdown("### 🔄 Интерактивная замена специалистов")
                 st.info("Выберите замену для перегруженных специалистов и пересчитайте оптимизацию")
                 
-                for overloaded_resource in analysis['overloaded'][:3]:  # Топ-3 перегруженных
+                for overloaded_resource in filtered_analysis['overloaded'][:3]:  # Топ-3 перегруженных
                     resource_name = overloaded_resource['resource_name']
                     overload_pct = overloaded_resource['workload_percentage']
                     
@@ -1740,7 +1781,7 @@ def main():
                         st.markdown(f"**Избыток:** {overload_pct - 100:.1f}%")
                         
                         # Варианты замены (недоиспользуемые ресурсы)
-                        replacement_options = [r['resource_name'] for r in analysis['underutilized']]
+                        replacement_options = [r['resource_name'] for r in filtered_analysis['underutilized']]
                         replacement_options.insert(0, "-- Не менять --")
                         
                         selected_replacement = st.selectbox(
