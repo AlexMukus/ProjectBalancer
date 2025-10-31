@@ -1,161 +1,53 @@
 # Анализатор управления ресурсами
 
-## Обзор
+## Overview
+This desktop application, built with Streamlit, analyzes Microsoft Project plan files. It parses MS Project XML files to identify workload imbalances among resources, visualizes allocation patterns with color-coded status indicators, and provides actionable recommendations for optimization. Users can filter resources, view detailed task breakdowns, and export analysis results in CSV or PDF format. The project aims to provide a quick prototyping interface focused on data analysis without complex frontend development, offering a Python-native approach to building interactive web applications for data visualization.
 
-Это настольное приложение, построенное на Streamlit для анализа файлов планов Microsoft Project. Приложение парсит XML-файлы MS Project для выявления дисбаланса рабочей нагрузки между ресурсами, визуализирует шаблоны распределения с цветными индикаторами статуса и предоставляет практические рекомендации по оптимизации. Пользователи могут фильтровать ресурсы, просматривать детальную разбивку задач и экспортировать результаты анализа в формате CSV или PDF.
+## Recent Changes (October 31, 2025)
 
-## Предпочтения пользователя
+**Critical Bug Fixes:**
+- Fixed `AttributeError: 'Figure' object has no attribute 'update_xaxis'` - replaced with correct Plotly methods: `update_xaxes()` and `update_yaxes()`
+- Optimized task shifting algorithm: weeks_with_dates construction moved to resource level (instead of repeating for each task)
+- Improved target week determination logic: now finds ALL overlapping weeks, selects the main one with the largest task proportion
+- Added real hours calculation instead of percentages only: hours_removed_from_source and hours_added_to_target
 
+**End-to-End Testing:**
+- All core features working correctly
+- Verified: file upload, analysis, optimization, visualization, interactive replacement, export
+
+## User Preferences
 Предпочитаемый стиль коммуникации: Простой, повседневный язык на русском.
 
-## Системная архитектура
+## System Architecture
 
-### Архитектура фронтенда
+### UI/UX Decisions
+The application uses Streamlit for rapid prototyping and interactive data visualization. Plotly is utilized for interactive, professional-grade charts, enabling rich interactivity like hovering, zooming, and panning. Custom CSS, inspired by Microsoft Fluent UI, is injected to enhance the professional appearance, incorporating a Red/Yellow/Green color-coding system for quick visual assessment and a card-based layout for metrics.
 
-**Выбор технологии: Streamlit**
-- **Проблема**: Необходимость быстрого прототипирования интерфейса с фокусом на данные без сложной разработки фронтенда
-- **Решение**: Streamlit предоставляет Python-нативный подход к созданию интерактивных веб-приложений
-- **Обоснование**: Позволяет быструю разработку дашбордов визуализации данных с минимальными знаниями JavaScript/HTML
-- **Компромиссы**: 
-  - Плюсы: Быстрая разработка, встроенные виджеты, отлично для приложений с данными
-  - Минусы: Ограниченная кастомизация по сравнению с React/Vue, только рендеринг на стороне сервера
+### Technical Implementations
+The backend processes MS Project XML files using `lxml` for robust parsing, handling large files efficiently. Data manipulation and complex resource allocation calculations are performed using Pandas DataFrames.
 
-**Стратегия визуализации: Plotly**
-- **Проблема**: Необходимость интерактивных, профессиональных графиков для анализа рабочей нагрузки
-- **Решение**: Объекты графиков Plotly для создания динамических визуализаций
-- **Обоснование**: Обеспечивает богатую интерактивность (наведение, масштабирование, панорамирование), необходимую для исследования данных ресурсов
-- **Рассмотренные альтернативы**: Matplotlib (только статика), Altair (менее интерактивна)
+### Feature Specifications
+- **Workload Calculation Logic**: Resources are categorized as Overloaded (>100% capacity - Red), Optimal (70-100% capacity - Green), or Underutilized (<70% capacity - Yellow) based on actual project timelines versus resource capacity.
+- **Recommendation Engine**: Provides actionable suggestions for rebalancing workloads, prioritizing resources based on their overload percentage (High: >120%, Medium: 100-120%, Low: optimizing underutilized resources).
+- **Intelligent Optimization**:
+    - Calculates weekly resource loading, identifies peaks and troughs, and caches tasks for performance.
+    - Implements a task shifting algorithm to automatically suggest optimal task shifts (1-30 days) for overloaded weeks, considering multi-week tasks and ensuring the target week does not become overloaded.
+    - Offers interactive specialist replacement, allowing users to substitute overloaded resources with underutilized ones.
+    - Visualizes weekly loading with Plotly bar charts, showing 100% and target loading lines, and color-coded weeks (red for overloaded, green for optimal, yellow for underutilized).
+- **Report Generation**: Exports professional PDF reports using ReportLab with custom styling and CSV exports via Pandas for raw data analysis.
+- **State Management**: Utilizes `st.session_state` to preserve parsed data, user selections, and analysis results across interactions.
 
-**Подход к стилизации: Пользовательский CSS с системой дизайна Microsoft**
-- **Проблема**: Стандартный внешний вид Streamlit не передаёт профессионального корпоративного ощущения
-- **Решение**: Инъекция пользовательского CSS с использованием цветовой палитры Microsoft Fluent UI
-- **Принципы дизайна**: 
-  - Система цветовой кодировки (Красный/Жёлтый/Зелёный) для быстрой визуальной оценки
-  - Цветовая схема в стиле Microsoft (#0078D4 основной синий и т.д.)
-  - Карточная компоновка для отображения метрик
+### System Design Choices
+The application is designed to be highly interactive and data-driven, leveraging Python's strengths in data processing and web application development. The choice of Streamlit and Plotly reflects a priority for quick development and rich interactive visualization.
 
-### Архитектура бэкенда
+## External Dependencies
 
-**Обработка файлов: Парсинг XML с помощью lxml**
-- **Проблема**: Необходимость парсинга формата XML Microsoft Project (файлы .xml, .mspdi)
-- **Решение**: lxml.etree для надёжного парсинга XML
-- **Обоснование**: lxml - отраслевой стандарт для обработки XML на Python, эффективно обрабатывает большие файлы
-- **Поток обработки**: Загрузка файла → Парсинг XML → Извлечение данных → Преобразование DataFrame
+### Core Libraries
+- **Streamlit**: Web framework for interactive applications.
+- **Pandas**: For tabular data manipulation and analysis.
+- **lxml**: High-performance XML parser, specifically for Microsoft Project XML files.
+- **Plotly**: For interactive charting and data visualization.
+- **ReportLab**: For generating PDF documents.
 
-**Обработка данных: Pandas**
-- **Проблема**: Сложные расчёты распределения ресурсов во времени
-- **Решение**: DataFrame Pandas для табличной обработки данных
-- **Ключевые операции**:
-  - Агрегация ресурсов по имени/фамилии
-  - Расчёт процента рабочей нагрузки на основе мощности
-  - Анализ распределения на основе временной шкалы
-  - Возможности фильтрации и поиска
-
-**Логика расчёта рабочей нагрузки**
-- **Пороги мощности**:
-  - Перегружен: >100% мощности (Красный индикатор)
-  - Оптимально: 70-100% мощности (Зелёный индикатор)
-  - Недоиспользуется: <70% мощности (Жёлтый индикатор)
-- **Алгоритм**: Анализирует фактические сроки проекта относительно мощности ресурса для вычисления процентов использования
-
-**Движок рекомендаций**
-- **Уровни приоритета**:
-  - Высокий приоритет: Ресурсы >120% мощности
-  - Средний приоритет: Ресурсы 100-120% мощности
-  - Низкий приоритет: Оптимизация недоиспользуемых ресурсов
-- **Вывод**: Практические предложения по перебалансировке рабочей нагрузки
-
-**Интеллектуальная оптимизация (новая функция)**
-- **Временной анализ загрузки**:
-  - Расчёт недельной загрузки каждого ресурса
-  - Выявление пиков и провалов загрузки во времени
-  - Кэширование задач для оптимизации производительности
-- **Алгоритм смещения задач**:
-  - Поиск перегруженных недель (>100%)
-  - Автоматический подбор оптимального сдвига задач (1-30 дней)
-  - Проверка, что смещение не создаёт новую перегрузку
-  - Оценка улучшения в процентах загрузки
-  - Приоритизация по размеру задач (большие задачи сдвигаются первыми)
-- **Настройки оптимизации**:
-  - Максимальное смещение задач (1-30 дней)
-  - Целевая загрузка ресурсов (70-100%)
-  - Режим оптимизации (балансировка/минимизация пиков)
-- **Интерактивная замена специалистов**:
-  - Выбор замены для топ-3 перегруженных ресурсов
-  - Предложение недоиспользуемых ресурсов как кандидатов
-  - Сохранение выбранных замен в сессии
-  - Возможность пересчёта с учётом замен
-
-### Генерация отчётов
-
-**Экспорт PDF: ReportLab**
-- **Проблема**: Необходимость профессиональных PDF-отчётов для распространения заинтересованным сторонам
-- **Решение**: Библиотека ReportLab с пользовательской стилизацией таблиц
-- **Функции**:
-  - Поддержка размеров страниц Letter/A4
-  - Стилизованные таблицы с заголовками
-  - Форматирование абзацев для рекомендаций
-  - Пользовательская цветовая схема, соответствующая интерфейсу
-
-**Экспорт CSV: Нативный Pandas**
-- **Проблема**: Пользователям нужны необработанные данные для дальнейшего анализа в Excel
-- **Решение**: Метод Pandas to_csv() с кодировкой UTF-8
-- **Обоснование**: Простой, универсальный формат для обмена данными
-
-### Управление состоянием
-
-**Стратегия состояния сессии**
-- **Проблема**: Streamlit перезапускает весь скрипт при взаимодействии, теряя данные
-- **Решение**: st.session_state для сохранения распарсенных данных и выбора пользователя
-- **Хранимые данные**:
-  - Распарсенные данные проекта
-  - Выбранные ресурсы
-  - Фильтры поиска
-  - Результаты анализа
-
-## Внешние зависимости
-
-### Основные библиотеки
-
-**Streamlit** (Веб-фреймворк)
-- Назначение: Фреймворк интерактивных веб-приложений
-- Случай использования: Рендеринг UI, виджеты, управление компоновкой
-- Ограничения версии: Рекомендуется последняя стабильная версия
-
-**Pandas** (Обработка данных)
-- Назначение: Манипуляция и анализ табличных данных
-- Случай использования: Агрегация данных ресурсов, расчёты, фильтрация
-- Критично для алгоритмов анализа рабочей нагрузки
-
-**lxml** (Парсинг XML)
-- Назначение: Высокопроизводительный парсер XML/HTML
-- Случай использования: Парсинг XML-файлов Microsoft Project
-- Альтернатива встроенному xml.etree для лучшей производительности
-
-**Plotly** (Визуализация)
-- Назначение: Библиотека интерактивного построения графиков
-- Случай использования: Графики распределения ресурсов, визуализация временных шкал
-- Предоставляет интерактивные графики на основе JavaScript
-
-**ReportLab** (Генерация PDF)
-- Назначение: Создание PDF-документов
-- Случай использования: Генерация профессиональных отчётов анализа
-- Зависимости: модули reportlab.lib, reportlab.platypus
-
-### Поддержка форматов файлов
-
-**Формат XML Microsoft Project**
-- Входной формат: файлы .xml, .mspdi
-- Требуется конвертация: файлы .mpp должны быть сохранены как XML из MS Project
-- Схема: Схема XML Microsoft Project для данных задач и ресурсов
-
-### Будущие соображения по интеграции
-
-**Потенциальная интеграция с базой данных**
-- Текущее состояние: Файловое хранилище только для сессии
-- Будущий вариант: Постоянное хранилище для исторического анализа
-- Технологии-кандидаты: SQLite для локального хранения, PostgreSQL для многопользовательских сценариев
-
-**Аутентификация (в настоящее время не реализована)**
-- Текущее состояние: Приложение с открытым доступом
-- Корпоративное соображение: Может потребоваться интеграция с Active Directory или провайдерами OAuth
+### File Format Support
+- **Microsoft Project XML**: Supports `.xml` and `.mspdi` file formats. `.mpp` files must be converted to XML from MS Project.

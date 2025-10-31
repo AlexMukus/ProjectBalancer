@@ -1335,8 +1335,8 @@ def main():
                 font=dict(family="Segoe UI, Inter, sans-serif", size=12, color="#323130")
             )
             
-            fig.update_xaxis(showgrid=False)
-            fig.update_yaxis(showgrid=True, gridcolor='#E5E5E5')
+            fig.update_xaxes(showgrid=False)
+            fig.update_yaxes(showgrid=True, gridcolor='#E5E5E5')
             
             st.plotly_chart(fig, use_container_width=True)
 
