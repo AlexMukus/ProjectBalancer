@@ -126,11 +126,46 @@ class MSProjectParser:
         self.tasks = []
         self.resources = []
         self.assignments = []
+    
+    @staticmethod
+    def clean_xml_content(xml_bytes):
+        """
+        Удаляет недопустимые символы из XML-контента.
+        XML 1.0 допускает только определённые символы:
+        - 0x09 (tab), 0x0A (LF), 0x0D (CR)
+        - 0x20-0xD7FF, 0xE000-0xFFFD, 0x10000-0x10FFFF
+        """
+        # Декодируем в строку
+        try:
+            xml_str = xml_bytes.decode('utf-8')
+        except:
+            xml_str = xml_bytes.decode('utf-8', errors='ignore')
+        
+        # Функция для проверки допустимости символа
+        def is_valid_xml_char(c):
+            codepoint = ord(c)
+            return (
+                codepoint == 0x09 or
+                codepoint == 0x0A or
+                codepoint == 0x0D or
+                (0x20 <= codepoint <= 0xD7FF) or
+                (0xE000 <= codepoint <= 0xFFFD) or
+                (0x10000 <= codepoint <= 0x10FFFF)
+            )
+        
+        # Фильтруем недопустимые символы
+        cleaned_str = ''.join(c for c in xml_str if is_valid_xml_char(c))
+        
+        # Возвращаем обратно в байты
+        return cleaned_str.encode('utf-8')
         
     def parse(self):
         """Парсинг XML-файла MS Project"""
         try:
-            tree = etree.parse(io.BytesIO(self.file_content))
+            # Очищаем XML от недопустимых символов
+            cleaned_content = self.clean_xml_content(self.file_content)
+            
+            tree = etree.parse(io.BytesIO(cleaned_content))
             root = tree.getroot()
             
             # Получение namespace
