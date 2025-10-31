@@ -254,8 +254,14 @@ class MSProjectParser:
         except:
             return default
     
-    def get_resource_workload_data(self):
-        """Calculate workload data for each resource"""
+    def get_resource_workload_data(self, date_range_start=None, date_range_end=None):
+        """
+        Calculate workload data for each resource.
+        
+        Args:
+            date_range_start: Начало анализируемого периода (datetime.date or None)
+            date_range_end: Конец анализируемого периода (datetime.date or None)
+        """
         workload_data = []
         
         # Calculate project timeframe for capacity calculation
@@ -273,12 +279,22 @@ class MSProjectParser:
                 if task_end and (project_end is None or task_end > project_end):
                     project_end = task_end
         
-        # Calculate total available work hours for the project
+        # Использовать выбранный диапазон или весь проект
+        if date_range_start and date_range_end:
+            # Конвертировать date в datetime для вычислений
+            from datetime import datetime as dt_class
+            range_start_dt = dt_class.combine(date_range_start, dt_class.min.time())
+            range_end_dt = dt_class.combine(date_range_end, dt_class.max.time())
+        else:
+            range_start_dt = project_start
+            range_end_dt = project_end
+        
+        # Calculate total available work hours for the selected range
         # MS Project model: 1 workday (P1D) = 8 hours
         # Default capacity for resources is 8 hours per workday
-        if project_start and project_end:
-            project_duration = project_end - project_start
-            calendar_days = project_duration.total_seconds() / (24 * 3600)
+        if range_start_dt and range_end_dt:
+            range_duration = range_end_dt - range_start_dt
+            calendar_days = range_duration.total_seconds() / (24 * 3600)
             
             if calendar_days <= 0:
                 # Minimum: 1 workday
@@ -296,22 +312,47 @@ class MSProjectParser:
             # Get all assignments for this resource
             resource_assignments = [a for a in self.assignments if a['resource_id'] == resource['id']]
             
-            # Calculate total work hours
+            # Calculate total work hours (only within date range)
             total_work_hours = 0
             task_details = []
             
             for assignment in resource_assignments:
                 # Get task info
                 task = next((t for t in self.tasks if t['id'] == assignment['task_id']), None)
-                if task:
-                    work_hours = self._parse_work_hours(assignment['work'])
-                    total_work_hours += work_hours
-                    task_details.append({
-                        'task_name': task['name'],
-                        'work_hours': work_hours,
-                        'start': task.get('start', 'N/A'),
-                        'finish': task.get('finish', 'N/A')
-                    })
+                if task and task['start'] and task['finish']:
+                    task_start = self._parse_date(task['start'])
+                    task_end = self._parse_date(task['finish'])
+                    
+                    if task_start and task_end and range_start_dt and range_end_dt:
+                        # Проверить пересечение задачи с диапазоном
+                        overlap_days, proportion = self.compute_overlap(
+                            task_start, task_end, range_start_dt, range_end_dt
+                        )
+                        
+                        if proportion > 0:
+                            # Учитывать только часы попадающие в диапазон
+                            total_task_hours = self._parse_work_hours(assignment['work'])
+                            hours_in_range = total_task_hours * proportion
+                            total_work_hours += hours_in_range
+                            
+                            task_details.append({
+                                'task_name': task['name'],
+                                'work_hours': hours_in_range,
+                                'total_hours': total_task_hours,
+                                'proportion': proportion,
+                                'start': task.get('start', 'N/A'),
+                                'finish': task.get('finish', 'N/A')
+                            })
+                    else:
+                        # Если нет диапазона, учитывать всю задачу
+                        work_hours = self._parse_work_hours(assignment['work'])
+                        total_work_hours += work_hours
+                        task_details.append({
+                            'task_name': task['name'],
+                            'work_hours': work_hours,
+                            'start': task.get('start', 'N/A'),
+                            'finish': task.get('finish', 'N/A')
+                        })
             
             # Calculate capacity based on resource MaxUnits and available work hours
             max_units = float(resource.get('max_units', 1.0))
@@ -406,8 +447,14 @@ class MSProjectParser:
             # Fallback to 0 if parsing fails
             return 0
     
-    def get_timeline_workload(self):
-        """Рассчитать временную загрузку ресурсов по неделям"""
+    def get_timeline_workload(self, date_range_start=None, date_range_end=None):
+        """
+        Рассчитать временную загрузку ресурсов по неделям.
+        
+        Args:
+            date_range_start: Начало анализируемого периода (datetime.date or None)
+            date_range_end: Конец анализируемого периода (datetime.date or None)
+        """
         timeline_data = {}
         
         # Определить временные границы проекта
@@ -425,21 +472,30 @@ class MSProjectParser:
                 if task_end and (project_end is None or task_end > project_end):
                     project_end = task_end
         
-        if not project_start or not project_end:
+        # Использовать выбранный диапазон или весь проект
+        if date_range_start and date_range_end:
+            from datetime import datetime as dt_class
+            range_start_dt = dt_class.combine(date_range_start, dt_class.min.time())
+            range_end_dt = dt_class.combine(date_range_end, dt_class.max.time())
+        else:
+            range_start_dt = project_start
+            range_end_dt = project_end
+        
+        if not range_start_dt or not range_end_dt:
             return {}
         
         # Кэшировать задачи для быстрого доступа
         task_dict = {t['id']: t for t in self.tasks}
         
-        # Создать недельные периоды
-        current_date = project_start
+        # Создать недельные периоды только для выбранного диапазона
+        current_date = range_start_dt
         weeks = []
-        while current_date <= project_end:
+        while current_date <= range_end_dt:
             week_end = current_date + timedelta(days=6)
             weeks.append({
                 'start': current_date,
-                'end': min(week_end, project_end),
-                'label': f"{current_date.strftime('%d.%m')} - {min(week_end, project_end).strftime('%d.%m')}"
+                'end': min(week_end, range_end_dt),
+                'label': f"{current_date.strftime('%d.%m')} - {min(week_end, range_end_dt).strftime('%d.%m')}"
             })
             current_date = week_end + timedelta(days=1)
         
@@ -505,6 +561,31 @@ class MSProjectParser:
                     project_end = task_end
         
         return project_start, project_end
+    
+    @staticmethod
+    def compute_overlap(task_start, task_end, range_start, range_end):
+        """
+        Рассчитать пересечение задачи с временным диапазоном.
+        Возвращает (overlap_days, proportion) где:
+        - overlap_days: количество дней пересечения
+        - proportion: доля задачи попадающая в диапазон (0.0-1.0)
+        """
+        # Проверить что задача пересекается с диапазоном
+        if task_end < range_start or task_start > range_end:
+            return 0, 0.0
+        
+        # Найти пересечение
+        overlap_start = max(task_start, range_start)
+        overlap_end = min(task_end, range_end)
+        
+        # Рассчитать дни
+        overlap_days = (overlap_end - overlap_start).days + 1
+        task_total_days = (task_end - task_start).days + 1
+        
+        # Рассчитать пропорцию
+        proportion = overlap_days / task_total_days if task_total_days > 0 else 0.0
+        
+        return max(0, overlap_days), max(0.0, min(1.0, proportion))
 
 # Analysis functions
 def analyze_workload(workload_data):
@@ -526,22 +607,27 @@ def analyze_workload(workload_data):
     
     return analysis
 
-def optimize_with_task_shifting(parser, settings):
+def optimize_with_task_shifting(parser, settings, date_range_start=None, date_range_end=None):
     """
     Оптимизация распределения с смещением задач во времени
     
-    settings = {
-        'max_shift_days': int,  # Максимальное смещение задач в днях
-        'target_load': float,   # Целевая загрузка (70-100%)
-        'mode': 'balance'       # Режим: 'balance' или 'minimize_peaks'
-    }
+    Args:
+        parser: MSProjectParser instance
+        settings: Настройки оптимизации
+            {
+                'max_shift_days': int,  # Максимальное смещение задач в днях
+                'target_load': float,   # Целевая загрузка (70-100%)
+                'mode': 'balance'       # Режим: 'balance' или 'minimize_peaks'
+            }
+        date_range_start: Начало анализируемого периода (datetime.date or None)
+        date_range_end: Конец анализируемого периода (datetime.date or None)
     """
     max_shift = settings.get('max_shift_days', 14)
     target_load = settings.get('target_load', 85)
     mode = settings.get('mode', 'balance')
     
-    # Получить временную загрузку и кэш задач
-    timeline_data = parser.get_timeline_workload()
+    # Получить временную загрузку и кэш задач с учётом диапазона
+    timeline_data = parser.get_timeline_workload(date_range_start, date_range_end)
     task_dict = {t['id']: t for t in parser.tasks}
     
     # Найти перегруженные периоды для каждого ресурса
@@ -569,6 +655,7 @@ def optimize_with_task_shifting(parser, settings):
         resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
         
         # Построить карту недель для быстрого поиска (один раз на ресурс)
+        # КРИТИЧНО: Использовать тот же диапазон что и в get_timeline_workload()
         project_start = None
         project_end = None
         for task_item in parser.tasks:
@@ -581,16 +668,25 @@ def optimize_with_task_shifting(parser, settings):
                 if te and (project_end is None or te > project_end):
                     project_end = te
         
-        if not project_start or not project_end:
+        # Использовать выбранный диапазон или весь проект
+        if date_range_start and date_range_end:
+            from datetime import datetime as dt_class
+            range_start_dt = dt_class.combine(date_range_start, dt_class.min.time())
+            range_end_dt = dt_class.combine(date_range_end, dt_class.max.time())
+        else:
+            range_start_dt = project_start
+            range_end_dt = project_end
+        
+        if not range_start_dt or not range_end_dt:
             continue
             
-        current_date = project_start
+        current_date = range_start_dt
         weeks_with_dates = []
-        while current_date <= project_end:
+        while current_date <= range_end_dt:
             week_end = current_date + timedelta(days=6)
             weeks_with_dates.append({
                 'start': current_date,
-                'end': min(week_end, project_end),
+                'end': min(week_end, range_end_dt),
                 'index': len(weeks_with_dates)
             })
             current_date = week_end + timedelta(days=1)
@@ -943,7 +1039,11 @@ def main():
                         if project_start and project_end:
                             st.session_state.date_range_start = project_start.date()
                             st.session_state.date_range_end = project_end.date()
-                        st.session_state.workload_data = parser.get_resource_workload_data()
+                        # Рассчитать данные с учетом выбранного диапазона
+                        st.session_state.workload_data = parser.get_resource_workload_data(
+                            st.session_state.date_range_start,
+                            st.session_state.date_range_end
+                        )
                         st.session_state.analysis = analyze_workload(st.session_state.workload_data)
                         st.success("✓ Файл успешно проанализирован!")
                         st.rerun()
@@ -982,7 +1082,15 @@ def main():
                     st.session_state.date_range_start = start_date
                     st.session_state.date_range_end = end_date
                     # Пересчитать данные с учетом нового диапазона
-                    # TODO: Применить фильтрацию в задаче 4
+                    if st.session_state.parser:
+                        st.session_state.workload_data = st.session_state.parser.get_resource_workload_data(
+                            st.session_state.date_range_start,
+                            st.session_state.date_range_end
+                        )
+                        st.session_state.analysis = analyze_workload(st.session_state.workload_data)
+                        # Сбросить timeline_data и optimization_results для пересчета
+                        st.session_state.timeline_data = None
+                        st.session_state.optimization_results = None
                     st.rerun()
         
         st.markdown("---")
@@ -1265,9 +1373,14 @@ def main():
                         }
                         st.session_state.optimization_results = optimize_with_task_shifting(
                             st.session_state.parser, 
-                            optimization_settings
+                            optimization_settings,
+                            st.session_state.date_range_start,
+                            st.session_state.date_range_end
                         )
-                        st.session_state.timeline_data = st.session_state.parser.get_timeline_workload()
+                        st.session_state.timeline_data = st.session_state.parser.get_timeline_workload(
+                            st.session_state.date_range_start,
+                            st.session_state.date_range_end
+                        )
                         st.success("✓ Оптимизация завершена!")
                         st.rerun()
             
