@@ -880,13 +880,14 @@ def generate_recommendations(analysis):
     
     return recommendations
 
-def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimization_results=None):
+def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimization_results=None, date_start=None, date_end=None, business_days=None, capacity=None):
     """
     Экспорт детального анализа в CSV с несколькими секциями:
-    1. Сводка по ресурсам (всегда)
-    2. Детализация задач по ресурсам (если есть parser)
-    3. Временное распределение по неделям (если есть timeline_data)
-    4. Предложения по оптимизации (если есть optimization_results)
+    1. Период анализа (если указан)
+    2. Сводка по ресурсам (всегда)
+    3. Детализация задач по ресурсам (если есть parser)
+    4. Временное распределение по неделям (если есть timeline_data)
+    5. Предложения по оптимизации (если есть optimization_results)
     """
     import re
     
@@ -898,6 +899,16 @@ def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimi
         return text
     
     csv_buffer = io.StringIO()
+    
+    # Период анализа (если указан)
+    if date_start and date_end:
+        period_str = f"{date_start.strftime('%d.%m.%Y')} - {date_end.strftime('%d.%m.%Y')}"
+        csv_buffer.write(f"ПЕРИОД АНАЛИЗА: {period_str}\n")
+        if business_days is not None:
+            csv_buffer.write(f"Рабочие дни: {business_days}\n")
+        if capacity is not None:
+            csv_buffer.write(f"Рабочая ёмкость на человека: {capacity} ч.\n")
+        csv_buffer.write("\n")
     
     # Очистить DataFrame от emoji перед экспортом
     df_clean = workload_df.copy()
@@ -968,13 +979,14 @@ def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimi
     # Кодировка cp1251 для совместимости с Excel
     return csv_buffer.getvalue().encode('cp1251')
 
-def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_data=None, optimization_results=None):
+def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_data=None, optimization_results=None, date_start=None, date_end=None, business_days=None, capacity=None):
     """
     Экспорт детального анализа в PDF с несколькими секциями:
-    1. Сводка и таблица рабочей нагрузки (всегда)
-    2. Детализация задач по ресурсам (если есть parser)
-    3. Временное распределение по неделям (если есть timeline_data)
-    4. Предложения по оптимизации (если есть optimization_results)
+    1. Период анализа (если указан)
+    2. Сводка и таблица рабочей нагрузки (всегда)
+    3. Детализация задач по ресурсам (если есть parser)
+    4. Временное распределение по неделям (если есть timeline_data)
+    5. Предложения по оптимизации (если есть optimization_results)
     """
     # Регистрация шрифтов DejaVu для поддержки кириллицы
     dejavu_available = False
@@ -1014,6 +1026,17 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
     elements.append(Paragraph("Отчёт по анализу рабочей нагрузки ресурсов", title_style))
     elements.append(Spacer(1, 0.2*inch))
     
+    # Период анализа (если указан)
+    if date_start and date_end:
+        period_str = f"{date_start.strftime('%d.%m.%Y')} - {date_end.strftime('%d.%m.%Y')}"
+        period_text = f"<b>Период анализа:</b> {period_str}"
+        if business_days is not None:
+            period_text += f"<br/><b>Рабочие дни:</b> {business_days}"
+        if capacity is not None:
+            period_text += f"<br/><b>Рабочая ёмкость на человека:</b> {capacity} ч."
+        elements.append(Paragraph(period_text, styles['Normal']))
+        elements.append(Spacer(1, 0.2*inch))
+    
     # Сводка
     summary_text = f"""
     <b>Сводка анализа</b><br/>
@@ -1027,18 +1050,36 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
     elements.append(Spacer(1, 0.3*inch))
     
     # Таблица рабочей нагрузки
-    table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Нагрузка %', 'Задачи', 'Статус']]
+    # Проверить наличие столбца "Рабочие часы за период"
+    has_period_hours = 'Рабочие часы за период' in workload_df.columns
+    
+    if has_period_hours:
+        table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Нагрузка %', 'Задачи', 'Статус']]
+    else:
+        table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Нагрузка %', 'Задачи', 'Статус']]
     
     for _, row in workload_df.iterrows():
         status = 'Перегружен' if row['Нагрузка %'] > 100 else ('Оптимально' if row['Нагрузка %'] >= 70 else 'Недоиспользуется')
-        table_data.append([
-            row['Имя ресурса'],
-            f"{row['Выделено часов']:.1f}ч",
-            f"{row['Ёмкость часов']:.1f}ч",
-            f"{row['Нагрузка %']:.1f}%",
-            str(row['Кол-во задач']),
-            status
-        ])
+        
+        if has_period_hours:
+            table_data.append([
+                row['Имя ресурса'],
+                f"{row['Выделено часов']:.1f}ч",
+                f"{row['Ёмкость часов']:.1f}ч",
+                f"{row['Рабочие часы за период']:.1f}ч",
+                f"{row['Нагрузка %']:.1f}%",
+                str(row['Кол-во задач']),
+                status
+            ])
+        else:
+            table_data.append([
+                row['Имя ресурса'],
+                f"{row['Выделено часов']:.1f}ч",
+                f"{row['Ёмкость часов']:.1f}ч",
+                f"{row['Нагрузка %']:.1f}%",
+                str(row['Кол-во задач']),
+                status
+            ])
     
     table = Table(table_data)
     table.setStyle(TableStyle([
@@ -1233,6 +1274,103 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
     buffer.seek(0)
     return buffer
 
+def calculate_business_days(start_date, end_date):
+    """Рассчитывает количество рабочих дней между двумя датами (исключая субботу и воскресенье)"""
+    if not start_date or not end_date:
+        return 0
+    
+    business_days = 0
+    current_date = start_date
+    
+    while current_date <= end_date:
+        # weekday(): 0=Monday, 1=Tuesday, ..., 6=Sunday
+        if current_date.weekday() < 5:  # 0-4 это пн-пт
+            business_days += 1
+        current_date += timedelta(days=1)
+    
+    return business_days
+
+def calculate_work_capacity(business_days):
+    """Рассчитывает рабочую емкость одного человека в часах (дни × 8 часов)"""
+    return business_days * 8
+
+def calculate_actual_hours_per_resource(parser, date_start, date_end):
+    """Рассчитывает фактические рабочие часы для каждого ресурса за указанный период"""
+    if not parser:
+        return {}
+    
+    resource_hours = {}
+    
+    # Получить все задачи из parser
+    for task in parser.tasks:
+        task_start_raw = task.get('start')
+        task_end_raw = task.get('finish')
+        
+        if not task_start_raw or not task_end_raw:
+            continue
+        
+        # Преобразовать в date если это datetime
+        if isinstance(task_start_raw, str):
+            try:
+                task_start = datetime.fromisoformat(task_start_raw).date()
+            except:
+                continue
+        elif isinstance(task_start_raw, datetime):
+            task_start = task_start_raw.date()
+        else:
+            task_start = task_start_raw
+            
+        if isinstance(task_end_raw, str):
+            try:
+                task_end = datetime.fromisoformat(task_end_raw).date()
+            except:
+                continue
+        elif isinstance(task_end_raw, datetime):
+            task_end = task_end_raw.date()
+        else:
+            task_end = task_end_raw
+        
+        # Проверить пересечение с выбранным диапазоном
+        if task_end < date_start or task_start > date_end:
+            continue
+        
+        # Пересечение диапазонов
+        overlap_start = max(task_start, date_start)
+        overlap_end = min(task_end, date_end)
+        
+        # Найти все назначения для этой задачи
+        task_assignments = [a for a in parser.assignments if a['task_id'] == task['id']]
+        
+        for assignment in task_assignments:
+            resource_id = assignment.get('resource_id')
+            if not resource_id:
+                continue
+                
+            # Найти имя ресурса
+            resource = next((r for r in parser.resources if r['id'] == resource_id), None)
+            if not resource:
+                continue
+                
+            resource_name = resource['name']
+            work_hours = parser._parse_work_hours(assignment.get('work', '0'))
+            
+            # Пропорция задачи в выбранном диапазоне
+            task_duration_days = (task_end - task_start).days + 1
+            overlap_duration_days = (overlap_end - overlap_start).days + 1
+            
+            if task_duration_days > 0:
+                proportion = overlap_duration_days / task_duration_days
+                hours_in_range = work_hours * proportion
+            else:
+                hours_in_range = work_hours
+            
+            # Суммировать часы для ресурса
+            if resource_name not in resource_hours:
+                resource_hours[resource_name] = 0
+            resource_hours[resource_name] += hours_in_range
+    
+    return resource_hours
+
 # Initialize session state
 if 'workload_data' not in st.session_state:
     st.session_state.workload_data = None
@@ -1250,6 +1388,8 @@ if 'date_range_start' not in st.session_state:
     st.session_state.date_range_start = None
 if 'date_range_end' not in st.session_state:
     st.session_state.date_range_end = None
+if 'resource_groups' not in st.session_state:
+    st.session_state.resource_groups = {}
 
 # Main application
 def main():
@@ -1448,6 +1588,91 @@ def main():
                      delta=f"{len(analysis['underutilized'])}" if len(analysis['underutilized']) > 0 else None,
                      delta_color="normal")
         
+        # Информация о периоде анализа
+        if st.session_state.date_range_start and st.session_state.date_range_end:
+            business_days = calculate_business_days(st.session_state.date_range_start, st.session_state.date_range_end)
+            work_capacity = calculate_work_capacity(business_days)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
+                st.metric("📅 Период анализа", period_str)
+            
+            with col2:
+                st.metric("📆 Рабочие дни", f"{business_days} дн.")
+            
+            with col3:
+                st.metric("⏰ Емкость на человека", f"{work_capacity} ч.")
+        
+        st.markdown("---")
+        
+        # Группы специалистов
+        st.markdown("### 👥 Группы специалистов")
+        
+        if st.session_state.resource_groups:
+            # Dropdown для выбора группы
+            group_names = ["-- Не выбрано --"] + list(st.session_state.resource_groups.keys())
+            selected_group = st.selectbox(
+                "Выберите сохраненную группу:",
+                options=group_names,
+                key="selected_group_dropdown"
+            )
+            
+            # Кнопка для применения группы
+            if selected_group != "-- Не выбрано --":
+                if st.button("✅ Применить группу", key="apply_group_btn"):
+                    group_resources = st.session_state.resource_groups[selected_group]
+                    st.session_state.applied_group = (selected_group, group_resources)
+                    st.success(f"✓ Группа '{selected_group}' применена ({len(group_resources)} чел.)")
+                    st.rerun()
+            
+            # Показать текущую примененную группу
+            if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group:
+                current_group_name, current_group_resources = st.session_state.applied_group
+                st.info(f"📌 Применена группа '{current_group_name}' ({len(current_group_resources)} чел.)")
+        else:
+            if not hasattr(st.session_state, 'applied_group'):
+                st.session_state.applied_group = None
+        
+        # Создание новой группы
+        with st.expander("➕ Создать новую группу"):
+            new_group_name = st.text_input("Название группы:", placeholder="например, Разработчики")
+            
+            all_names = [item['resource_name'] for item in workload_data]
+            new_group_resources = st.multiselect(
+                "Выберите участников группы:",
+                options=all_names,
+                key="new_group_resources"
+            )
+            
+            if st.button("💾 Сохранить группу"):
+                if not new_group_name:
+                    st.error("Введите название группы")
+                elif not new_group_resources:
+                    st.error("Выберите хотя бы одного участника")
+                elif new_group_name in st.session_state.resource_groups:
+                    st.error("Группа с таким названием уже существует")
+                else:
+                    st.session_state.resource_groups[new_group_name] = new_group_resources
+                    st.success(f"✓ Группа '{new_group_name}' создана ({len(new_group_resources)} чел.)")
+                    st.rerun()
+        
+        # Управление существующими группами
+        if st.session_state.resource_groups:
+            with st.expander("📋 Управление группами"):
+                for group_name in list(st.session_state.resource_groups.keys()):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.markdown(f"**{group_name}** ({len(st.session_state.resource_groups[group_name])} чел.)")
+                    with col2:
+                        if st.button("🗑️", key=f"delete_{group_name}", help=f"Удалить группу '{group_name}'"):
+                            del st.session_state.resource_groups[group_name]
+                            if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group and st.session_state.applied_group[0] == group_name:
+                                st.session_state.applied_group = None
+                            st.success(f"✓ Группа '{group_name}' удалена")
+                            st.rerun()
+        
         st.markdown("---")
         
         # Поиск персонала
@@ -1468,14 +1693,28 @@ def main():
             filtered_data = [item for item in workload_data 
                            if search_term.lower() in item['resource_name'].lower()]
         
+        # Применить группу если выбрана
+        if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group:
+            group_name, group_resources = st.session_state.applied_group
+            filtered_data = [item for item in filtered_data 
+                           if item['resource_name'] in group_resources]
+        
         if not filtered_data:
             st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
         else:
+            # Определить default значения для multiselect
+            if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group:
+                # Если группа применена, выбрать всех из группы
+                default_resources = [item['resource_name'] for item in filtered_data]
+            else:
+                # Иначе выбрать всех из filtered_data
+                default_resources = [item['resource_name'] for item in filtered_data]
+            
             # Множественный выбор
             selected_resources = st.multiselect(
                 "Выберите конкретные ресурсы для анализа:",
                 options=[item['resource_name'] for item in filtered_data],
-                default=[item['resource_name'] for item in filtered_data]
+                default=default_resources
             )
             
             if selected_resources:
@@ -1487,10 +1726,23 @@ def main():
             # Таблица анализа рабочей нагрузки
             st.markdown("### 📈 Анализ рабочей нагрузки")
             
+            # Рассчитать фактические часы для каждого ресурса за период
+            actual_hours_dict = {}
+            if st.session_state.parser and st.session_state.date_range_start and st.session_state.date_range_end:
+                actual_hours_dict = calculate_actual_hours_per_resource(
+                    st.session_state.parser,
+                    st.session_state.date_range_start,
+                    st.session_state.date_range_end
+                )
+            
             # Подготовка датафрейма
             df_data = []
             for item in display_data:
                 percentage = item['workload_percentage']
+                resource_name = item['resource_name']
+                
+                # Получить фактические часы за период
+                actual_hours = actual_hours_dict.get(resource_name, 0.0)
                 
                 # Индикатор статуса
                 if percentage > 100:
@@ -1504,9 +1756,10 @@ def main():
                     status_color = "#FFB900"
                 
                 df_data.append({
-                    'Имя ресурса': item['resource_name'],
+                    'Имя ресурса': resource_name,
                     'Выделено часов': item['total_work_hours'],
                     'Ёмкость часов': item['max_capacity'],
+                    'Рабочие часы за период': actual_hours,
                     'Нагрузка %': percentage,
                     'Кол-во задач': item['task_count'],
                     'Статус': status
@@ -1526,6 +1779,7 @@ def main():
             styled_df = df.style.apply(highlight_workload, axis=1).format({
                 'Выделено часов': '{:.1f}',
                 'Ёмкость часов': '{:.1f}',
+                'Рабочие часы за период': '{:.1f}',
                 'Нагрузка %': '{:.1f}%'
             })
             
@@ -1812,12 +2066,26 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
+                # Рассчитать параметры периода для экспорта
+                export_date_start = st.session_state.date_range_start
+                export_date_end = st.session_state.date_range_end
+                export_business_days = None
+                export_capacity = None
+                
+                if export_date_start and export_date_end:
+                    export_business_days = calculate_business_days(export_date_start, export_date_end)
+                    export_capacity = calculate_work_capacity(export_business_days)
+                
                 csv_data = export_to_csv(
                     df, 
                     analysis, 
                     parser=st.session_state.parser,
                     timeline_data=st.session_state.timeline_data,
-                    optimization_results=st.session_state.optimization_results
+                    optimization_results=st.session_state.optimization_results,
+                    date_start=export_date_start,
+                    date_end=export_date_end,
+                    business_days=export_business_days,
+                    capacity=export_capacity
                 )
                 st.download_button(
                     label="📄 Скачать CSV",
@@ -1834,7 +2102,11 @@ def main():
                     recommendations,
                     parser=st.session_state.parser,
                     timeline_data=st.session_state.timeline_data,
-                    optimization_results=st.session_state.optimization_results
+                    optimization_results=st.session_state.optimization_results,
+                    date_start=export_date_start,
+                    date_end=export_date_end,
+                    business_days=export_business_days,
+                    capacity=export_capacity
                 )
                 st.download_button(
                     label="📑 Скачать PDF",

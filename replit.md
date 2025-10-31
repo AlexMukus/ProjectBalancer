@@ -5,7 +5,31 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 
 ## Recent Changes (October 31, 2025)
 
-**Latest Enhancements (Smart Default Dates & Resource Filtering):**
+**Latest Enhancements (Resource Groups, Period Analytics & Actual Hours):**
+- **Resource Groups Management**: Added complete workflow for managing custom resource groups:
+  - Create groups with custom names and selected resources
+  - Save groups in session state (persist during session)
+  - Apply groups via explicit button with UI refresh (st.rerun)
+  - Delete groups with automatic cleanup of applied state
+  - Expander-based UI for group creation and management
+- **Period Analysis Panel**: Added control panel displaying:
+  - Selected date range (formatted as DD.MM.YYYY - DD.MM.YYYY)
+  - Business days count (excluding weekends: Saturday, Sunday)
+  - Work capacity per person (business_days × 8 hours)
+  - Implemented `calculate_business_days()` and `calculate_work_capacity()` helper functions
+- **Actual Working Hours**: New column "Рабочие часы за период" in analysis table:
+  - Calculates actual hours for each resource within selected date range
+  - Uses proportional allocation for tasks spanning multiple periods
+  - Implemented `calculate_actual_hours_per_resource()` function
+- **Enhanced CSV/PDF Export**: Exports now include:
+  - Period information header (dates, business days, capacity)
+  - New "Рабочие часы за период" / "Часы за период" column in resource tables
+  - Updated export function signatures with period parameters
+- **Bug Fixes**: 
+  - Fixed `KeyError: 'start_date'` in `calculate_actual_hours_per_resource`: now uses task.get('start')/task.get('finish') and parser.assignments
+  - Fixed group application flow: added "Применить группу" button with proper st.rerun() behavior
+
+**Previous Enhancements (Smart Default Dates & Resource Filtering):**
 - **Default Date Range Logic**: Changed initialization from full project range to current week context:
   - Start: current date - 7 days, rounded to Monday (weekday=0)
   - End: current date + 14 days, rounded to Friday (weekday=4)
