@@ -945,8 +945,14 @@ def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimi
     # Кодировка cp1251 для совместимости с Excel
     return csv_buffer.getvalue().encode('cp1251')
 
-def export_to_pdf(workload_df, analysis, recommendations):
-    """Экспорт анализа в PDF"""
+def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_data=None, optimization_results=None):
+    """
+    Экспорт детального анализа в PDF с несколькими секциями:
+    1. Сводка и таблица рабочей нагрузки (всегда)
+    2. Детализация задач по ресурсам (если есть parser)
+    3. Временное распределение по неделям (если есть timeline_data)
+    4. Предложения по оптимизации (если есть optimization_results)
+    """
     # Регистрация шрифтов DejaVu для поддержки кириллицы
     dejavu_available = False
     try:
@@ -1043,6 +1049,160 @@ def export_to_pdf(workload_df, analysis, recommendations):
             else:
                 rec_text = f"{i}. Увеличить использование {rec['resource']}: {rec['available_capacity']}"
             elements.append(Paragraph(rec_text, styles['Normal']))
+    
+    # Секция: Детализация задач по ресурсам
+    if parser:
+        elements.append(Spacer(1, 0.5*inch))
+        heading_style = ParagraphStyle(
+            'CustomHeading2',
+            parent=styles['Heading2'],
+            fontName=bold_font
+        )
+        elements.append(Paragraph("<b>Детализация задач по ресурсам</b>", heading_style))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Создать таблицу задач (ограничить до 50 задач для читаемости)
+        task_table_data = [['Ресурс', 'Задача', 'Начало', 'Конец', 'Часы']]
+        task_count = 0
+        max_tasks = 50
+        
+        for resource in parser.resources[:10]:  # Ограничить до 10 ресурсов
+            resource_name = resource['name']
+            resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+            
+            for assignment in resource_assignments[:5]:  # До 5 задач на ресурс
+                if task_count >= max_tasks:
+                    break
+                task = next((t for t in parser.tasks if t['id'] == assignment['task_id']), None)
+                if task:
+                    task_name = task.get('name', 'Без названия')[:30]  # Обрезать длинные имена
+                    task_start = task.get('start', '')[:10] if task.get('start') else ''
+                    task_finish = task.get('finish', '')[:10] if task.get('finish') else ''
+                    task_hours = parser._parse_work_hours(assignment['work'])
+                    
+                    task_table_data.append([
+                        resource_name[:20],
+                        task_name,
+                        task_start,
+                        task_finish,
+                        f"{task_hours:.1f}ч"
+                    ])
+                    task_count += 1
+            
+            if task_count >= max_tasks:
+                break
+        
+        if len(task_table_data) > 1:
+            task_table = Table(task_table_data, colWidths=[1.2*inch, 2.5*inch, 1*inch, 1*inch, 0.8*inch])
+            task_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0078D4')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), bold_font),
+                ('FONTNAME', (0, 1), (-1, -1), normal_font),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+            ]))
+            elements.append(task_table)
+    
+    # Секция: Временное распределение по неделям
+    if timeline_data:
+        elements.append(Spacer(1, 0.5*inch))
+        heading_style = ParagraphStyle(
+            'CustomHeading2',
+            parent=styles['Heading2'],
+            fontName=bold_font
+        )
+        elements.append(Paragraph("<b>Временное распределение по неделям</b>", heading_style))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Создать таблицу недель (ограничить для читаемости)
+        week_table_data = [['Ресурс', 'Период', 'Часы', 'Ёмкость', 'Загрузка %']]
+        week_count = 0
+        max_weeks = 40
+        
+        for resource_name, weekly_loads in list(timeline_data.items())[:5]:  # До 5 ресурсов
+            for week_data in weekly_loads[:8]:  # До 8 недель на ресурс
+                if week_count >= max_weeks:
+                    break
+                week_label = week_data['week']
+                hours = week_data['hours']
+                capacity = week_data['capacity']
+                percentage = week_data['percentage']
+                
+                week_table_data.append([
+                    resource_name[:20],
+                    week_label,
+                    f"{hours:.1f}ч",
+                    f"{capacity:.1f}ч",
+                    f"{percentage:.1f}%"
+                ])
+                week_count += 1
+            
+            if week_count >= max_weeks:
+                break
+        
+        if len(week_table_data) > 1:
+            week_table = Table(week_table_data, colWidths=[1.5*inch, 1.5*inch, 1*inch, 1*inch, 1*inch])
+            week_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0078D4')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), bold_font),
+                ('FONTNAME', (0, 1), (-1, -1), normal_font),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+            ]))
+            elements.append(week_table)
+    
+    # Секция: Детальные предложения по оптимизации
+    if optimization_results:
+        elements.append(Spacer(1, 0.5*inch))
+        heading_style = ParagraphStyle(
+            'CustomHeading2',
+            parent=styles['Heading2'],
+            fontName=bold_font
+        )
+        elements.append(Paragraph("<b>Детальные предложения по оптимизации</b>", heading_style))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Создать таблицу оптимизации
+        opt_table_data = [['Ресурс', 'Задача', 'Действие', 'Детали']]
+        
+        for i, suggestion in enumerate(optimization_results[:20]):  # До 20 предложений
+            resource = suggestion.get('resource', '')[:20]
+            task = suggestion.get('task', '')[:25]
+            action = suggestion.get('action', '')[:30]
+            details = suggestion.get('details', '')[:50]
+            
+            opt_table_data.append([
+                resource,
+                task,
+                action,
+                details
+            ])
+        
+        if len(opt_table_data) > 1:
+            opt_table = Table(opt_table_data, colWidths=[1.2*inch, 1.8*inch, 1.5*inch, 2*inch])
+            opt_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0078D4')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), bold_font),
+                ('FONTNAME', (0, 1), (-1, -1), normal_font),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 1), (-1, -1), 7),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+            ]))
+            elements.append(opt_table)
     
     doc.build(elements)
     buffer.seek(0)
@@ -1606,7 +1766,14 @@ def main():
                 )
             
             with col2:
-                pdf_data = export_to_pdf(df, analysis, recommendations)
+                pdf_data = export_to_pdf(
+                    df, 
+                    analysis, 
+                    recommendations,
+                    parser=st.session_state.parser,
+                    timeline_data=st.session_state.timeline_data,
+                    optimization_results=st.session_state.optimization_results
+                )
                 st.download_button(
                     label="📑 Скачать PDF",
                     data=pdf_data,
