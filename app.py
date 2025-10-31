@@ -1583,122 +1583,168 @@ def main():
         
         st.markdown("---")
         
-        # Группы специалистов
-        st.markdown("### 👥 Группы специалистов")
+        # Объединенная секция управления персоналом
+        st.markdown("### 👥 Управление персоналом")
         
-        if st.session_state.resource_groups:
-            # Dropdown для выбора группы
-            group_names = ["-- Не выбрано --"] + list(st.session_state.resource_groups.keys())
-            selected_group = st.selectbox(
-                "Выберите сохраненную группу:",
-                options=group_names,
-                key="selected_group_dropdown"
-            )
-            
-            # Кнопка для применения группы
-            if selected_group != "-- Не выбрано --":
-                if st.button("✅ Применить группу", key="apply_group_btn"):
-                    group_resources = st.session_state.resource_groups[selected_group]
-                    st.session_state.applied_group = (selected_group, group_resources)
-                    st.success(f"✓ Группа '{selected_group}' применена ({len(group_resources)} чел.)")
-                    st.rerun()
-            
-            # Показать текущую примененную группу
-            if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group:
-                current_group_name, current_group_resources = st.session_state.applied_group
-                st.info(f"📌 Применена группа '{current_group_name}' ({len(current_group_resources)} чел.)")
-        else:
-            if not hasattr(st.session_state, 'applied_group'):
-                st.session_state.applied_group = None
+        # Инициализация applied_group если нужно
+        if not hasattr(st.session_state, 'applied_group'):
+            st.session_state.applied_group = None
         
-        # Создание новой группы
-        with st.expander("➕ Создать новую группу"):
-            new_group_name = st.text_input("Название группы:", placeholder="например, Разработчики")
-            
+        # Инициализация переменных для использования вне табов
+        selected_resources = []
+        display_data = workload_data
+        
+        # Два таба: Текущий выбор и Сохраненные группы
+        tab1, tab2 = st.tabs(["🔍 Текущий выбор", "💾 Сохраненные группы"])
+        
+        # ========== ТАБ 1: ТЕКУЩИЙ ВЫБОР ==========
+        with tab1:
             all_names = [item['resource_name'] for item in workload_data]
-            new_group_resources = st.multiselect(
-                "Выберите участников группы:",
-                options=all_names,
-                key="new_group_resources"
-            )
             
-            if st.button("💾 Сохранить группу"):
-                if not new_group_name:
-                    st.error("Введите название группы")
-                elif not new_group_resources:
-                    st.error("Выберите хотя бы одного участника")
-                elif new_group_name in st.session_state.resource_groups:
-                    st.error("Группа с таким названием уже существует")
+            # Поиск по имени
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                search_term = st.text_input("Поиск по фамилии или имени:", placeholder="например, Иванов")
+            with col2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                show_all = st.checkbox("Показать всех", value=True)
+            
+            # Фильтрация данных
+            if show_all or not search_term:
+                filtered_data = workload_data
+            else:
+                filtered_data = [item for item in workload_data 
+                               if search_term.lower() in item['resource_name'].lower()]
+            
+            # Применить группу если выбрана
+            if st.session_state.applied_group:
+                group_name, group_resources = st.session_state.applied_group
+                filtered_data = [item for item in filtered_data 
+                               if item['resource_name'] in group_resources]
+                st.info(f"📌 Применена группа '{group_name}' ({len(group_resources)} чел.)")
+            
+            if not filtered_data:
+                st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
+                selected_resources = []
+                display_data = []
+            else:
+                # Определить default значения для multiselect
+                if st.session_state.applied_group:
+                    # Если группа применена, выбрать всех из группы
+                    default_resources = [item['resource_name'] for item in filtered_data]
                 else:
-                    st.session_state.resource_groups[new_group_name] = new_group_resources
-                    st.success(f"✓ Группа '{new_group_name}' создана ({len(new_group_resources)} чел.)")
-                    st.rerun()
+                    # Иначе выбрать всех из filtered_data
+                    default_resources = [item['resource_name'] for item in filtered_data]
+                
+                # Множественный выбор
+                selected_resources = st.multiselect(
+                    "Выберите конкретные ресурсы для анализа:",
+                    options=[item['resource_name'] for item in filtered_data],
+                    default=default_resources,
+                    key="current_selection_multiselect"
+                )
+                
+                # НОВАЯ ФУНКЦИЯ: Быстрое сохранение текущего выбора как группы
+                if selected_resources and len(selected_resources) > 0:
+                    st.markdown("---")
+                    with st.expander("💾 Сохранить текущий выбор как группу"):
+                        quick_group_name = st.text_input(
+                            "Название новой группы:",
+                            placeholder="например, Команда А",
+                            key="quick_save_group_name"
+                        )
+                        if st.button("💾 Сохранить", key="quick_save_btn"):
+                            if not quick_group_name:
+                                st.error("Введите название группы")
+                            elif quick_group_name in st.session_state.resource_groups:
+                                st.error("Группа с таким названием уже существует")
+                            else:
+                                st.session_state.resource_groups[quick_group_name] = selected_resources.copy()
+                                st.success(f"✓ Группа '{quick_group_name}' создана ({len(selected_resources)} чел.)")
+                                st.rerun()
+                
+                if selected_resources:
+                    display_data = [item for item in filtered_data 
+                                  if item['resource_name'] in selected_resources]
+                else:
+                    display_data = filtered_data
         
-        # Управление существующими группами
-        if st.session_state.resource_groups:
-            with st.expander("📋 Управление группами"):
+        # ========== ТАБ 2: СОХРАНЕННЫЕ ГРУППЫ ==========
+        with tab2:
+            # Выбор и применение сохраненной группы
+            if st.session_state.resource_groups:
+                st.markdown("**Применить сохраненную группу:**")
+                group_names = ["-- Не выбрано --"] + list(st.session_state.resource_groups.keys())
+                selected_group = st.selectbox(
+                    "Выберите группу:",
+                    options=group_names,
+                    key="selected_group_dropdown"
+                )
+                
+                # Кнопка для применения группы
+                if selected_group != "-- Не выбрано --":
+                    group_resources = st.session_state.resource_groups[selected_group]
+                    st.caption(f"👥 {len(group_resources)} человек: {', '.join(group_resources[:3])}{'...' if len(group_resources) > 3 else ''}")
+                    
+                    if st.button("✅ Применить группу", key="apply_group_btn"):
+                        st.session_state.applied_group = (selected_group, group_resources)
+                        st.success(f"✓ Группа '{selected_group}' применена ({len(group_resources)} чел.)")
+                        st.rerun()
+                
+                st.markdown("---")
+            else:
+                st.info("У вас пока нет сохраненных групп. Создайте новую ниже.")
+            
+            # Создание новой группы с нуля
+            st.markdown("**Создать новую группу:**")
+            with st.expander("➕ Создать группу", expanded=not st.session_state.resource_groups):
+                new_group_name = st.text_input("Название группы:", placeholder="например, Разработчики", key="new_group_name_input")
+                
+                all_names = [item['resource_name'] for item in workload_data]
+                new_group_resources = st.multiselect(
+                    "Выберите участников группы:",
+                    options=all_names,
+                    key="new_group_resources"
+                )
+                
+                if st.button("💾 Сохранить группу", key="save_new_group_btn"):
+                    if not new_group_name:
+                        st.error("Введите название группы")
+                    elif not new_group_resources:
+                        st.error("Выберите хотя бы одного участника")
+                    elif new_group_name in st.session_state.resource_groups:
+                        st.error("Группа с таким названием уже существует")
+                    else:
+                        st.session_state.resource_groups[new_group_name] = new_group_resources
+                        st.success(f"✓ Группа '{new_group_name}' создана ({len(new_group_resources)} чел.)")
+                        st.rerun()
+            
+            # Управление существующими группами
+            if st.session_state.resource_groups:
+                st.markdown("---")
+                st.markdown("**Управление группами:**")
                 for group_name in list(st.session_state.resource_groups.keys()):
-                    col1, col2 = st.columns([3, 1])
+                    col1, col2 = st.columns([4, 1])
                     with col1:
+                        resources_preview = ', '.join(st.session_state.resource_groups[group_name][:3])
+                        if len(st.session_state.resource_groups[group_name]) > 3:
+                            resources_preview += '...'
                         st.markdown(f"**{group_name}** ({len(st.session_state.resource_groups[group_name])} чел.)")
+                        st.caption(resources_preview)
                     with col2:
                         if st.button("🗑️", key=f"delete_{group_name}", help=f"Удалить группу '{group_name}'"):
                             del st.session_state.resource_groups[group_name]
-                            if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group and st.session_state.applied_group[0] == group_name:
+                            if st.session_state.applied_group and st.session_state.applied_group[0] == group_name:
                                 st.session_state.applied_group = None
                             st.success(f"✓ Группа '{group_name}' удалена")
                             st.rerun()
         
         st.markdown("---")
         
-        # Поиск персонала
-        st.markdown("### 🔍 Фильтр по персоналу")
-        all_names = [item['resource_name'] for item in workload_data]
-        
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            search_term = st.text_input("Поиск по фамилии или имени:", placeholder="например, Иванов")
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            show_all = st.checkbox("Показать всех", value=True)
-        
-        # Filter data
-        if show_all or not search_term:
-            filtered_data = workload_data
+        # Проверка что есть данные для отображения
+        if not selected_resources and not display_data:
+            st.info("Выберите ресурсы для анализа в табе 'Текущий выбор'")
         else:
-            filtered_data = [item for item in workload_data 
-                           if search_term.lower() in item['resource_name'].lower()]
-        
-        # Применить группу если выбрана
-        if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group:
-            group_name, group_resources = st.session_state.applied_group
-            filtered_data = [item for item in filtered_data 
-                           if item['resource_name'] in group_resources]
-        
-        if not filtered_data:
-            st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
-        else:
-            # Определить default значения для multiselect
-            if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group:
-                # Если группа применена, выбрать всех из группы
-                default_resources = [item['resource_name'] for item in filtered_data]
-            else:
-                # Иначе выбрать всех из filtered_data
-                default_resources = [item['resource_name'] for item in filtered_data]
-            
-            # Множественный выбор
-            selected_resources = st.multiselect(
-                "Выберите конкретные ресурсы для анализа:",
-                options=[item['resource_name'] for item in filtered_data],
-                default=default_resources
-            )
-            
-            if selected_resources:
-                display_data = [item for item in filtered_data 
-                              if item['resource_name'] in selected_resources]
-            else:
-                display_data = filtered_data
-            
             # Таблица анализа рабочей нагрузки
             st.markdown("### 📈 Анализ рабочей нагрузки")
             
