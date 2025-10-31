@@ -12,8 +12,7 @@ from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# Импорт тем оформления
-from fluent_ui_components import get_fluent_ui_css
+# Импорт MD3 компонентов
 from md3_components import get_md3_css, md3_info_panel, get_md3_table_style, get_md3_chart_colors
 
 # Конфигурация страницы
@@ -24,15 +23,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Инициализация темы в session_state
-if 'theme' not in st.session_state:
-    st.session_state.theme = 'fluent'  # По умолчанию Fluent UI
-
-# Применение выбранной темы
-if st.session_state.theme == 'md3':
-    st.markdown(get_md3_css(), unsafe_allow_html=True)
-else:
-    st.markdown(get_fluent_ui_css(), unsafe_allow_html=True)
+# Применение MD3 дизайна
+st.markdown(get_md3_css(), unsafe_allow_html=True)
 
 # MS Project XML Parser
 class MSProjectParser:
@@ -965,36 +957,75 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
     elements.append(Spacer(1, 0.3*inch))
     
     # Таблица рабочей нагрузки
-    # Проверить наличие столбца "Рабочие часы за период"
+    # Проверить наличие столбцов
     has_period_hours = 'Рабочие часы за период' in workload_df.columns
+    has_percentage_col = 'Нагрузка %' in workload_df.columns
+    has_hours_col = 'Загрузка (часы)' in workload_df.columns
     
+    # Заголовки таблицы
     if has_period_hours:
-        table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Нагрузка %', 'Задачи', 'Статус']]
+        if has_hours_col:
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Загрузка (ч)', 'Задачи', 'Статус']]
+        else:
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Нагрузка %', 'Задачи', 'Статус']]
     else:
-        table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Нагрузка %', 'Задачи', 'Статус']]
+        if has_hours_col:
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Загрузка (ч)', 'Задачи', 'Статус']]
+        else:
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Нагрузка %', 'Задачи', 'Статус']]
     
     for _, row in workload_df.iterrows():
-        status = 'Перегружен' if row['Нагрузка %'] > 100 else ('Оптимально' if row['Нагрузка %'] >= 70 else 'Недоиспользуется')
-        
-        if has_period_hours:
-            table_data.append([
-                row['Имя ресурса'],
-                f"{row['Выделено часов']:.1f}ч",
-                f"{row['Ёмкость часов']:.1f}ч",
-                f"{row['Рабочие часы за период']:.1f}ч",
-                f"{row['Нагрузка %']:.1f}%",
-                str(row['Кол-во задач']),
-                status
-            ])
+        # Вычислить процент для определения статуса
+        if has_percentage_col:
+            percentage = row['Нагрузка %']
+        elif has_hours_col and row['Ёмкость часов'] > 0:
+            percentage = (row['Загрузка (часы)'] / row['Ёмкость часов']) * 100
         else:
-            table_data.append([
-                row['Имя ресурса'],
-                f"{row['Выделено часов']:.1f}ч",
-                f"{row['Ёмкость часов']:.1f}ч",
-                f"{row['Нагрузка %']:.1f}%",
-                str(row['Кол-во задач']),
-                status
-            ])
+            percentage = 0
+        
+        status = 'Перегружен' if percentage > 100 else ('Оптимально' if percentage >= 70 else 'Недоиспользуется')
+        
+        # Формировать строку в зависимости от наличия колонок
+        if has_period_hours:
+            if has_hours_col:
+                table_data.append([
+                    row['Имя ресурса'],
+                    f"{row['Выделено часов']:.1f}ч",
+                    f"{row['Ёмкость часов']:.1f}ч",
+                    f"{row['Рабочие часы за период']:.1f}ч",
+                    f"{row['Загрузка (часы)']:.1f}ч",
+                    str(row['Кол-во задач']),
+                    status
+                ])
+            else:
+                table_data.append([
+                    row['Имя ресурса'],
+                    f"{row['Выделено часов']:.1f}ч",
+                    f"{row['Ёмкость часов']:.1f}ч",
+                    f"{row['Рабочие часы за период']:.1f}ч",
+                    f"{row['Нагрузка %']:.1f}%",
+                    str(row['Кол-во задач']),
+                    status
+                ])
+        else:
+            if has_hours_col:
+                table_data.append([
+                    row['Имя ресурса'],
+                    f"{row['Выделено часов']:.1f}ч",
+                    f"{row['Ёмкость часов']:.1f}ч",
+                    f"{row['Загрузка (часы)']:.1f}ч",
+                    str(row['Кол-во задач']),
+                    status
+                ])
+            else:
+                table_data.append([
+                    row['Имя ресурса'],
+                    f"{row['Выделено часов']:.1f}ч",
+                    f"{row['Ёмкость часов']:.1f}ч",
+                    f"{row['Нагрузка %']:.1f}%",
+                    str(row['Кол-во задач']),
+                    status
+                ])
     
     table = Table(table_data)
     table.setStyle(TableStyle([
@@ -1305,6 +1336,8 @@ if 'date_range_end' not in st.session_state:
     st.session_state.date_range_end = None
 if 'resource_groups' not in st.session_state:
     st.session_state.resource_groups = {}
+if 'display_mode' not in st.session_state:
+    st.session_state.display_mode = 'percentage'  # По умолчанию проценты
 
 # Main application
 def main():
@@ -1318,24 +1351,24 @@ def main():
     
     # Боковая панель
     with st.sidebar:
-        # Переключатель тем
-        st.markdown("### 🎨 Тема оформления")
-        theme_options = {
-            'fluent': 'Fluent UI (классика)',
-            'md3': 'Material Design 3 (современный)'
+        # Переключатель отображения загрузки
+        st.markdown("###  Отображение загрузки")
+        display_options = {
+            'percentage': 'В процентах',
+            'hours': 'В часах'
         }
         
-        selected_theme = st.radio(
-            "Выберите тему:",
-            options=list(theme_options.keys()),
-            format_func=lambda x: theme_options[x],
-            key='theme_selector',
+        selected_display = st.radio(
+            "Выберите формат:",
+            options=list(display_options.keys()),
+            format_func=lambda x: display_options[x],
+            key='display_selector',
             label_visibility='collapsed'
         )
         
-        # Если тема изменилась, обновляем session_state и перезагружаем
-        if selected_theme != st.session_state.theme:
-            st.session_state.theme = selected_theme
+        # Если режим отображения изменился, обновляем session_state и перезагружаем
+        if selected_display != st.session_state.display_mode:
+            st.session_state.display_mode = selected_display
             st.rerun()
         
         st.markdown("---")
@@ -1530,24 +1563,9 @@ def main():
             business_days = calculate_business_days(st.session_state.date_range_start, st.session_state.date_range_end)
             work_capacity = calculate_work_capacity(business_days)
             
-            # MD3 или Fluent UI отображение
-            if st.session_state.theme == 'md3':
-                # Material Design 3 стиль
-                period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
-                st.markdown(md3_info_panel(period_str, business_days, work_capacity), unsafe_allow_html=True)
-            else:
-                # Fluent UI стиль (классический)
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
-                    st.metric("📅 Период анализа", period_str)
-                
-                with col2:
-                    st.metric("📆 Рабочие дни", f"{business_days} дн.")
-                
-                with col3:
-                    st.metric("⏰ Емкость на человека", f"{work_capacity} ч.")
+            # Material Design 3 панель управления периодом
+            period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
+            st.markdown(md3_info_panel(period_str, business_days, work_capacity), unsafe_allow_html=True)
         
         st.markdown("---")
         
@@ -1670,9 +1688,8 @@ def main():
             # Таблица анализа рабочей нагрузки
             st.markdown("### 📈 Анализ рабочей нагрузки")
             
-            # Применить MD3 стили для таблиц если выбрана MD3 тема
-            if st.session_state.theme == 'md3':
-                st.markdown(get_md3_table_style(), unsafe_allow_html=True)
+            # Применить MD3 стили для таблиц
+            st.markdown(get_md3_table_style(), unsafe_allow_html=True)
             
             # Рассчитать фактические часы для каждого ресурса за период
             actual_hours_dict = {}
@@ -1688,9 +1705,13 @@ def main():
             for item in display_data:
                 percentage = item['workload_percentage']
                 resource_name = item['resource_name']
+                capacity = item['max_capacity']
                 
                 # Получить фактические часы за период
                 actual_hours = actual_hours_dict.get(resource_name, 0.0)
+                
+                # Рассчитать загрузку в часах
+                workload_hours = (capacity * percentage / 100) if capacity > 0 else 0
                 
                 # Индикатор статуса
                 if percentage > 100:
@@ -1703,33 +1724,60 @@ def main():
                     status = "🟡 Недоиспользуется"
                     status_color = "#FFB900"
                 
-                df_data.append({
+                # Формируем строку в зависимости от режима отображения
+                row_data = {
                     'Имя ресурса': resource_name,
                     'Выделено часов': item['total_work_hours'],
-                    'Ёмкость часов': item['max_capacity'],
-                    'Рабочие часы за период': actual_hours,
-                    'Нагрузка %': percentage,
-                    'Кол-во задач': item['task_count'],
-                    'Статус': status
-                })
+                    'Ёмкость часов': capacity,
+                    'Рабочие часы за период': actual_hours
+                }
+                
+                # Добавляем колонку загрузки в зависимости от режима
+                if st.session_state.display_mode == 'hours':
+                    row_data['Загрузка (часы)'] = workload_hours
+                else:
+                    row_data['Нагрузка %'] = percentage
+                
+                row_data['Кол-во задач'] = item['task_count']
+                row_data['Статус'] = status
+                
+                df_data.append(row_data)
             
             df = pd.DataFrame(df_data)
             
             # Раскраска датафрейма
             def highlight_workload(row):
-                if row['Нагрузка %'] > 100:
+                # Определяем процент в зависимости от режима отображения
+                if st.session_state.display_mode == 'hours':
+                    # В режиме часов нужно пересчитать процент из часов
+                    capacity = row['Ёмкость часов']
+                    if capacity > 0:
+                        pct = (row['Загрузка (часы)'] / capacity) * 100
+                    else:
+                        pct = 0
+                else:
+                    pct = row['Нагрузка %']
+                
+                if pct > 100:
                     return ['background-color: #FFE5E5'] * len(row)
-                elif row['Нагрузка %'] < 70:
+                elif pct < 70:
                     return ['background-color: #FFF4E5'] * len(row)
                 else:
                     return ['background-color: #E5F5E5'] * len(row)
             
-            styled_df = df.style.apply(highlight_workload, axis=1).format({
+            # Форматирование в зависимости от режима
+            format_dict = {
                 'Выделено часов': '{:.1f}',
                 'Ёмкость часов': '{:.1f}',
-                'Рабочие часы за период': '{:.1f}',
-                'Нагрузка %': '{:.1f}%'
-            })
+                'Рабочие часы за период': '{:.1f}'
+            }
+            
+            if st.session_state.display_mode == 'hours':
+                format_dict['Загрузка (часы)'] = '{:.1f}'
+            else:
+                format_dict['Нагрузка %'] = '{:.1f}%'
+            
+            styled_df = df.style.apply(highlight_workload, axis=1).format(format_dict)
             
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
             
@@ -1922,18 +1970,12 @@ def main():
                 if selected_resource_timeline and selected_resource_timeline in timeline_data:
                     resource_timeline = timeline_data[selected_resource_timeline]
                     
-                    # Получить цвета в зависимости от темы
-                    if st.session_state.theme == 'md3':
-                        chart_colors = get_md3_chart_colors()
-                        color_overloaded = chart_colors['overloaded']
-                        color_optimal = chart_colors['optimal']
-                        color_underutilized = chart_colors['underutilized']
-                        color_primary = chart_colors['optimal']
-                    else:
-                        color_overloaded = '#FF4B4B'
-                        color_optimal = '#107C10'
-                        color_underutilized = '#FFB900'
-                        color_primary = '#0078D4'
+                    # Получить MD3 цвета для графиков
+                    chart_colors = get_md3_chart_colors()
+                    color_overloaded = chart_colors['overloaded']
+                    color_optimal = chart_colors['optimal']
+                    color_underutilized = chart_colors['underutilized']
+                    color_primary = chart_colors['optimal']
                     
                     # График временной загрузки
                     fig_timeline = go.Figure()
@@ -1941,6 +1983,29 @@ def main():
                     weeks = [w['week'] for w in resource_timeline]
                     percentages = [w['percentage'] for w in resource_timeline]
                     hours = [w['hours'] for w in resource_timeline]
+                    
+                    # Подготовить данные в зависимости от режима
+                    if st.session_state.display_mode == 'hours':
+                        y_values = hours
+                        text_values = [f"{h:.1f} ч." for h in hours]
+                        hover_template = '<b>%{x}</b><br>Загрузка: %{y:.1f} ч.<br><extra></extra>'
+                        yaxis_title = "Загрузка (часы)"
+                        
+                        # Пороговые линии в часах (на основе средней недельной ёмкости)
+                        avg_week_capacity = sum(hours) / len(hours) if hours else 40
+                        threshold_100 = avg_week_capacity
+                        threshold_target = avg_week_capacity * (target_load / 100)
+                        line1_text = f"{threshold_100:.1f} ч. (100%)"
+                        line2_text = f"{threshold_target:.1f} ч. ({target_load}%)"
+                    else:
+                        y_values = percentages
+                        text_values = [f"{p:.1f}%" for p in percentages]
+                        hover_template = '<b>%{x}</b><br>Загрузка: %{y:.1f}%<br>Часов: %{customdata:.1f} ч.<br><extra></extra>'
+                        yaxis_title = "Загрузка (%)"
+                        threshold_100 = 100
+                        threshold_target = target_load
+                        line1_text = "100%"
+                        line2_text = f"Цель {target_load}%"
                     
                     # Цветовая кодировка по неделям
                     colors_timeline = []
@@ -1954,24 +2019,24 @@ def main():
                     
                     fig_timeline.add_trace(go.Bar(
                         x=weeks,
-                        y=percentages,
+                        y=y_values,
                         marker_color=colors_timeline,
-                        text=[f"{p:.1f}%" for p in percentages],
+                        text=text_values,
                         textposition='outside',
-                        hovertemplate='<b>%{x}</b><br>Загрузка: %{y:.1f}%<br>Часов: ' + 
-                                     '<br>'.join([f"{h:.1f}" for h in hours]) + '<br><extra></extra>',
+                        customdata=hours,
+                        hovertemplate=hover_template,
                         name='Загрузка'
                     ))
                     
-                    fig_timeline.add_hline(y=100, line_dash="dash", line_color=color_overloaded, 
-                                          annotation_text="100%", annotation_position="right")
-                    fig_timeline.add_hline(y=target_load, line_dash="dot", line_color=color_primary, 
-                                          annotation_text=f"Цель {target_load}%", annotation_position="right")
+                    fig_timeline.add_hline(y=threshold_100, line_dash="dash", line_color=color_overloaded, 
+                                          annotation_text=line1_text, annotation_position="right")
+                    fig_timeline.add_hline(y=threshold_target, line_dash="dot", line_color=color_primary, 
+                                          annotation_text=line2_text, annotation_position="right")
                     
                     fig_timeline.update_layout(
                         title=f"Недельная загрузка: {selected_resource_timeline}",
                         xaxis_title="Неделя",
-                        yaxis_title="Загрузка (%)",
+                        yaxis_title=yaxis_title,
                         showlegend=False,
                         height=400,
                         plot_bgcolor='white',
@@ -2080,20 +2145,40 @@ def main():
             # Визуализация
             st.markdown("### 📊 Распределение рабочей нагрузки")
             
-            # Получить цвета в зависимости от темы
-            if st.session_state.theme == 'md3':
-                chart_colors = get_md3_chart_colors()
-                color_overloaded = chart_colors['overloaded']
-                color_optimal = chart_colors['optimal']
-                color_underutilized = chart_colors['underutilized']
-            else:
-                color_overloaded = '#FF4B4B'
-                color_optimal = '#107C10'
-                color_underutilized = '#FFB900'
+            # Получить MD3 цвета для графиков
+            chart_colors = get_md3_chart_colors()
+            color_overloaded = chart_colors['overloaded']
+            color_optimal = chart_colors['optimal']
+            color_underutilized = chart_colors['underutilized']
             
             fig = go.Figure()
             
-            # Add bars
+            # Подготовить данные в зависимости от режима отображения
+            if st.session_state.display_mode == 'hours':
+                # Режим часов
+                y_values = [(item['max_capacity'] * item['workload_percentage'] / 100) for item in display_data]
+                text_values = [f"{y:.1f} ч." for y in y_values]
+                hover_template = '<b>%{x}</b><br>Загрузка: %{y:.1f} ч.<br><extra></extra>'
+                yaxis_title = "Загрузка (часы)"
+                
+                # Пороговые линии в часах (средняя ёмкость)
+                avg_capacity = sum([item['max_capacity'] for item in display_data]) / len(display_data) if display_data else 0
+                threshold_100 = avg_capacity
+                threshold_70 = avg_capacity * 0.7
+                line1_text = f"{threshold_100:.1f} ч. (100%)"
+                line2_text = f"{threshold_70:.1f} ч. (70%)"
+            else:
+                # Режим процентов
+                y_values = [item['workload_percentage'] for item in display_data]
+                text_values = [f"{y:.1f}%" for y in y_values]
+                hover_template = '<b>%{x}</b><br>Нагрузка: %{y:.1f}%<br><extra></extra>'
+                yaxis_title = "Процент нагрузки (%)"
+                threshold_100 = 100
+                threshold_70 = 70
+                line1_text = "100% ёмкость"
+                line2_text = "70% порог"
+            
+            # Цветовая кодировка
             colors_map = []
             for item in display_data:
                 percentage = item['workload_percentage']
@@ -2106,23 +2191,23 @@ def main():
             
             fig.add_trace(go.Bar(
                 x=[item['resource_name'] for item in display_data],
-                y=[item['workload_percentage'] for item in display_data],
+                y=y_values,
                 marker_color=colors_map,
-                text=[f"{item['workload_percentage']:.1f}%" for item in display_data],
+                text=text_values,
                 textposition='outside',
-                hovertemplate='<b>%{x}</b><br>Workload: %{y:.1f}%<br><extra></extra>'
+                hovertemplate=hover_template
             ))
             
             # Добавление пороговых линий
-            fig.add_hline(y=100, line_dash="dash", line_color=color_overloaded, 
-                         annotation_text="100% ёмкость", annotation_position="right")
-            fig.add_hline(y=70, line_dash="dash", line_color=color_underutilized, 
-                         annotation_text="70% порог", annotation_position="right")
+            fig.add_hline(y=threshold_100, line_dash="dash", line_color=color_overloaded, 
+                         annotation_text=line1_text, annotation_position="right")
+            fig.add_hline(y=threshold_70, line_dash="dash", line_color=color_underutilized, 
+                         annotation_text=line2_text, annotation_position="right")
             
             fig.update_layout(
                 title="Сравнение рабочей нагрузки ресурсов",
                 xaxis_title="Ресурс",
-                yaxis_title="Процент нагрузки (%)",
+                yaxis_title=yaxis_title,
                 showlegend=False,
                 height=500,
                 plot_bgcolor='white',
