@@ -368,6 +368,88 @@ class MSProjectParser:
         except Exception as e:
             # Fallback to 0 if parsing fails
             return 0
+    
+    def get_timeline_workload(self):
+        """Рассчитать временную загрузку ресурсов по неделям"""
+        timeline_data = {}
+        
+        # Определить временные границы проекта
+        project_start = None
+        project_end = None
+        
+        for task in self.tasks:
+            if task['start']:
+                task_start = self._parse_date(task['start'])
+                if task_start and (project_start is None or task_start < project_start):
+                    project_start = task_start
+            
+            if task['finish']:
+                task_end = self._parse_date(task['finish'])
+                if task_end and (project_end is None or task_end > project_end):
+                    project_end = task_end
+        
+        if not project_start or not project_end:
+            return {}
+        
+        # Кэшировать задачи для быстрого доступа
+        task_dict = {t['id']: t for t in self.tasks}
+        
+        # Создать недельные периоды
+        current_date = project_start
+        weeks = []
+        while current_date <= project_end:
+            week_end = current_date + timedelta(days=6)
+            weeks.append({
+                'start': current_date,
+                'end': min(week_end, project_end),
+                'label': f"{current_date.strftime('%d.%m')} - {min(week_end, project_end).strftime('%d.%m')}"
+            })
+            current_date = week_end + timedelta(days=1)
+        
+        # Для каждого ресурса рассчитать загрузку по неделям
+        for resource in self.resources:
+            resource_assignments = [a for a in self.assignments if a['resource_id'] == resource['id']]
+            weekly_loads = []
+            
+            for week in weeks:
+                week_hours = 0
+                
+                for assignment in resource_assignments:
+                    task = task_dict.get(assignment['task_id'])  # Использовать кэш
+                    if task and task['start'] and task['finish']:
+                        task_start = self._parse_date(task['start'])
+                        task_end = self._parse_date(task['finish'])
+                        
+                        if task_start and task_end:
+                            # Проверить пересечение задачи с неделей
+                            overlap_start = max(task_start, week['start'])
+                            overlap_end = min(task_end, week['end'])
+                            
+                            if overlap_start <= overlap_end:
+                                # Рассчитать долю работы в этой неделе
+                                task_total_hours = self._parse_work_hours(assignment['work'])
+                                task_duration_days = (task_end - task_start).days + 1
+                                overlap_days = (overlap_end - overlap_start).days + 1
+                                
+                                if task_duration_days > 0:
+                                    proportion = overlap_days / task_duration_days
+                                    week_hours += task_total_hours * proportion
+                
+                # Ёмкость за неделю: 5 рабочих дней × 8 часов × max_units
+                max_units = float(resource.get('max_units', 1.0))
+                week_capacity = 40 * max_units
+                week_percentage = (week_hours / week_capacity) * 100 if week_capacity > 0 else 0
+                
+                weekly_loads.append({
+                    'week': week['label'],
+                    'hours': week_hours,
+                    'capacity': week_capacity,
+                    'percentage': week_percentage
+                })
+            
+            timeline_data[resource['name']] = weekly_loads
+        
+        return timeline_data
 
 # Analysis functions
 def analyze_workload(workload_data):
@@ -388,6 +470,195 @@ def analyze_workload(workload_data):
             analysis['underutilized'].append(item)
     
     return analysis
+
+def optimize_with_task_shifting(parser, settings):
+    """
+    Оптимизация распределения с смещением задач во времени
+    
+    settings = {
+        'max_shift_days': int,  # Максимальное смещение задач в днях
+        'target_load': float,   # Целевая загрузка (70-100%)
+        'mode': 'balance'       # Режим: 'balance' или 'minimize_peaks'
+    }
+    """
+    max_shift = settings.get('max_shift_days', 14)
+    target_load = settings.get('target_load', 85)
+    mode = settings.get('mode', 'balance')
+    
+    # Получить временную загрузку и кэш задач
+    timeline_data = parser.get_timeline_workload()
+    task_dict = {t['id']: t for t in parser.tasks}
+    
+    # Найти перегруженные периоды для каждого ресурса
+    optimization_suggestions = []
+    
+    for resource_name, weekly_loads in timeline_data.items():
+        # Найти перегруженные и недозагруженные недели
+        overloaded_weeks = {}
+        underloaded_weeks = {}
+        
+        for i, week_data in enumerate(weekly_loads):
+            if week_data['percentage'] > 100:
+                overloaded_weeks[i] = week_data
+            elif week_data['percentage'] < target_load:
+                underloaded_weeks[i] = week_data
+        
+        if not overloaded_weeks:
+            continue
+        
+        # Найти задачи этого ресурса
+        resource = next((r for r in parser.resources if r['name'] == resource_name), None)
+        if not resource:
+            continue
+        
+        resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+        
+        # Построить карту недель для быстрого поиска (один раз на ресурс)
+        project_start = None
+        project_end = None
+        for task_item in parser.tasks:
+            if task_item['start']:
+                ts = parser._parse_date(task_item['start'])
+                if ts and (project_start is None or ts < project_start):
+                    project_start = ts
+            if task_item['finish']:
+                te = parser._parse_date(task_item['finish'])
+                if te and (project_end is None or te > project_end):
+                    project_end = te
+        
+        if not project_start or not project_end:
+            continue
+            
+        current_date = project_start
+        weeks_with_dates = []
+        while current_date <= project_end:
+            week_end = current_date + timedelta(days=6)
+            weeks_with_dates.append({
+                'start': current_date,
+                'end': min(week_end, project_end),
+                'index': len(weeks_with_dates)
+            })
+            current_date = week_end + timedelta(days=1)
+        
+        # Для каждой перегруженной недели найти задачи, которые можно сдвинуть
+        for week_idx, week_data in overloaded_weeks.items():
+            excess_hours = week_data['hours'] - week_data['capacity']
+            
+            # Найти задачи, пересекающиеся с этой неделей
+            tasks_in_week = []
+            for assignment in resource_assignments:
+                task = task_dict.get(assignment['task_id'])
+                if not task or not task['start'] or not task['finish']:
+                    continue
+                
+                task_start = parser._parse_date(task['start'])
+                task_end = parser._parse_date(task['finish'])
+                if not task_start or not task_end:
+                    continue
+                
+                task_hours = parser._parse_work_hours(assignment['work'])
+                tasks_in_week.append({
+                    'task': task,
+                    'assignment': assignment,
+                    'start': task_start,
+                    'end': task_end,
+                    'hours': task_hours
+                })
+            
+            # Попробовать сдвинуть задачи в недозагруженные периоды
+            for task_info in sorted(tasks_in_week, key=lambda x: x['hours'], reverse=True):
+                task = task_info['task']
+                task_start = task_info['start']
+                task_end = task_info['end']
+                task_hours = task_info['hours']
+                
+                best_shift = None
+                best_improvement = 0
+                
+                # Проверить все возможные сдвиги
+                for shift_days in range(1, max_shift + 1):
+                    new_start = task_start + timedelta(days=shift_days)
+                    new_end = task_end + timedelta(days=shift_days)
+                    
+                    # Найти все недели, в которые попадёт сдвинутая задача
+                    overlapping_weeks = []
+                    for week_info in weeks_with_dates:
+                        overlap_start = max(new_start, week_info['start'])
+                        overlap_end = min(new_end, week_info['end'])
+                        
+                        if overlap_start <= overlap_end:
+                            # Рассчитать долю задачи в этой неделе
+                            task_duration_days = (task_end - task_start).days + 1
+                            overlap_days = (overlap_end - overlap_start).days + 1
+                            proportion = overlap_days / task_duration_days if task_duration_days > 0 else 0
+                            hours_in_week = task_hours * proportion
+                            
+                            overlapping_weeks.append({
+                                'index': week_info['index'],
+                                'hours': hours_in_week,
+                                'proportion': proportion
+                            })
+                    
+                    if not overlapping_weeks:
+                        continue
+                    
+                    # Выбрать основную целевую неделю (с наибольшей долей задачи)
+                    main_target = max(overlapping_weeks, key=lambda w: w['proportion'])
+                    target_week_idx = main_target['index']
+                    
+                    if target_week_idx == week_idx or target_week_idx >= len(weekly_loads):
+                        continue
+                    
+                    # Проверить, что целевая неделя менее загружена
+                    target_week = weekly_loads[target_week_idx]
+                    
+                    # Рассчитать реальное улучшение в часах
+                    # Сколько часов освободится в исходной неделе
+                    hours_removed_from_source = task_hours  # Упрощение: вся задача уходит
+                    # Сколько часов добавится в целевую неделю
+                    hours_added_to_target = main_target['hours']
+                    
+                    # Проверить, что сдвиг действительно снижает перегрузку
+                    new_source_hours = week_data['hours'] - hours_removed_from_source
+                    new_source_percentage = (new_source_hours / week_data['capacity']) * 100 if week_data['capacity'] > 0 else 0
+                    
+                    new_target_hours = target_week['hours'] + hours_added_to_target
+                    new_target_percentage = (new_target_hours / target_week['capacity']) * 100 if target_week['capacity'] > 0 else 0
+                    
+                    # Условия: исходная неделя становится менее перегруженной, целевая не становится перегруженной
+                    if new_source_percentage < week_data['percentage'] and new_target_percentage <= 100:
+                        # Оценить улучшение как снижение перегрузки
+                        improvement = week_data['percentage'] - new_source_percentage
+                        
+                        if improvement > best_improvement:
+                            best_improvement = improvement
+                            best_shift = shift_days
+                
+                # Если нашли хороший сдвиг, добавляем рекомендацию
+                if best_shift:
+                    new_start = task_start + timedelta(days=best_shift)
+                    new_end = task_end + timedelta(days=best_shift)
+                    
+                    optimization_suggestions.append({
+                        'type': 'shift_task',
+                        'resource': resource_name,
+                        'task_name': task['name'],
+                        'task_hours': task_hours,
+                        'original_start': task_start.strftime('%Y-%m-%d'),
+                        'original_end': task_end.strftime('%Y-%m-%d'),
+                        'suggested_start': new_start.strftime('%Y-%m-%d'),
+                        'suggested_end': new_end.strftime('%Y-%m-%d'),
+                        'shift_days': best_shift,
+                        'improvement': f'{best_improvement:.1f}%',
+                        'reason': f'Снизить перегрузку на {excess_hours:.1f}ч в неделю {week_data["week"]}',
+                        'priority': 'Высокий' if week_data['percentage'] > 120 else 'Средний'
+                    })
+                    
+                    # Для режима balance берём только одну задачу на неделю
+                    if mode == 'balance':
+                        break
+    
+    return optimization_suggestions
 
 def generate_recommendations(analysis):
     """Generate actionable recommendations based on actual resource capacity"""
@@ -529,6 +800,12 @@ if 'analysis' not in st.session_state:
     st.session_state.analysis = None
 if 'parser' not in st.session_state:
     st.session_state.parser = None
+if 'optimization_results' not in st.session_state:
+    st.session_state.optimization_results = None
+if 'timeline_data' not in st.session_state:
+    st.session_state.timeline_data = None
+if 'resource_replacements' not in st.session_state:
+    st.session_state.resource_replacements = {}
 
 # Main application
 def main():
@@ -575,6 +852,9 @@ def main():
         Этот инструмент помогает:
         - Выявить перегруженные ресурсы (>100%)
         - Найти недоиспользованные мощности (<70%)
+        - **Оптимизировать распределение смещением задач**
+        - **Анализировать временную загрузку по неделям**
+        - **Интерактивно заменять специалистов**
         - Получить рекомендации по балансировке нагрузки
         - Экспортировать отчёты анализа
         """)
@@ -804,7 +1084,192 @@ def main():
             else:
                 st.success("✓ Все ресурсы распределены оптимально!")
             
+            # Оптимизация с смещением задач
+            st.markdown("---")
+            st.markdown("## ⚙️ Интеллектуальная оптимизация")
+            
+            with st.expander("🎯 Настройки оптимизации", expanded=True):
+                col_opt1, col_opt2, col_opt3 = st.columns(3)
+                
+                with col_opt1:
+                    max_shift_days = st.slider(
+                        "Максимальное смещение задач (дни)",
+                        min_value=1,
+                        max_value=30,
+                        value=14,
+                        help="Насколько далеко можно сдвигать задачи для оптимизации"
+                    )
+                
+                with col_opt2:
+                    target_load = st.slider(
+                        "Целевая загрузка (%)",
+                        min_value=70,
+                        max_value=100,
+                        value=85,
+                        help="Желаемый уровень загрузки ресурсов"
+                    )
+                
+                with col_opt3:
+                    opt_mode = st.selectbox(
+                        "Режим оптимизации",
+                        options=['balance', 'minimize_peaks'],
+                        format_func=lambda x: 'Балансировка загрузки' if x == 'balance' else 'Минимизация пиков',
+                        help="Стратегия оптимизации распределения"
+                    )
+                
+                if st.button("🚀 Запустить оптимизацию", use_container_width=True):
+                    with st.spinner("Расчёт оптимального распределения..."):
+                        optimization_settings = {
+                            'max_shift_days': max_shift_days,
+                            'target_load': target_load,
+                            'mode': opt_mode
+                        }
+                        st.session_state.optimization_results = optimize_with_task_shifting(
+                            st.session_state.parser, 
+                            optimization_settings
+                        )
+                        st.session_state.timeline_data = st.session_state.parser.get_timeline_workload()
+                        st.success("✓ Оптимизация завершена!")
+                        st.rerun()
+            
+            # Показать результаты оптимизации
+            if st.session_state.optimization_results:
+                st.markdown("### 📈 Предложения по смещению задач")
+                
+                opt_results = st.session_state.optimization_results
+                if opt_results:
+                    for i, suggestion in enumerate(opt_results[:10], 1):
+                        priority_color = {
+                            'Высокий': '#FF4B4B',
+                            'Средний': '#FFB900',
+                            'Низкий': '#107C10'
+                        }.get(suggestion.get('priority', 'Низкий'), '#107C10')
+                        
+                        improvement_info = f"<b>Улучшение:</b> {suggestion['improvement']}<br/>" if 'improvement' in suggestion else ""
+                        st.markdown(f"""
+                        <div style='background-color: white; padding: 15px; border-radius: 8px; 
+                                    margin: 10px 0; border-left: 4px solid {priority_color}'>
+                            <b>{i}. Сдвинуть задачу "{suggestion['task_name']}"</b> 
+                            <span style='background-color: {priority_color}; color: white; 
+                                         padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
+                                {suggestion['priority']}
+                            </span><br/>
+                            <b>Ресурс:</b> {suggestion['resource']}<br/>
+                            <b>Объём работы:</b> {suggestion['task_hours']:.1f} часов<br/>
+                            <b>Текущие даты:</b> {suggestion['original_start']} → {suggestion['original_end']}<br/>
+                            <b>Предлагаемые даты:</b> {suggestion['suggested_start']} → {suggestion['suggested_end']} 
+                            (сдвиг на {suggestion['shift_days']} дн.)<br/>
+                            {improvement_info}
+                            <b>Причина:</b> {suggestion['reason']}
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.success("✓ Распределение оптимально, смещения не требуются!")
+            
+            # Временная загрузка ресурсов
+            if st.session_state.timeline_data:
+                st.markdown("### 📅 Временная загрузка ресурсов по неделям")
+                
+                timeline_data = st.session_state.timeline_data
+                
+                # Выбор ресурса для детальной визуализации
+                selected_resource_timeline = st.selectbox(
+                    "Выберите ресурс для детального анализа",
+                    options=list(timeline_data.keys()),
+                    key="timeline_resource_select"
+                )
+                
+                if selected_resource_timeline and selected_resource_timeline in timeline_data:
+                    resource_timeline = timeline_data[selected_resource_timeline]
+                    
+                    # График временной загрузки
+                    fig_timeline = go.Figure()
+                    
+                    weeks = [w['week'] for w in resource_timeline]
+                    percentages = [w['percentage'] for w in resource_timeline]
+                    hours = [w['hours'] for w in resource_timeline]
+                    
+                    # Цветовая кодировка по неделям
+                    colors_timeline = []
+                    for pct in percentages:
+                        if pct > 100:
+                            colors_timeline.append('#FF4B4B')
+                        elif pct >= 70:
+                            colors_timeline.append('#107C10')
+                        else:
+                            colors_timeline.append('#FFB900')
+                    
+                    fig_timeline.add_trace(go.Bar(
+                        x=weeks,
+                        y=percentages,
+                        marker_color=colors_timeline,
+                        text=[f"{p:.1f}%" for p in percentages],
+                        textposition='outside',
+                        hovertemplate='<b>%{x}</b><br>Загрузка: %{y:.1f}%<br>Часов: ' + 
+                                     '<br>'.join([f"{h:.1f}" for h in hours]) + '<br><extra></extra>',
+                        name='Загрузка'
+                    ))
+                    
+                    fig_timeline.add_hline(y=100, line_dash="dash", line_color="#FF4B4B", 
+                                          annotation_text="100%", annotation_position="right")
+                    fig_timeline.add_hline(y=target_load, line_dash="dot", line_color="#0078D4", 
+                                          annotation_text=f"Цель {target_load}%", annotation_position="right")
+                    
+                    fig_timeline.update_layout(
+                        title=f"Недельная загрузка: {selected_resource_timeline}",
+                        xaxis_title="Неделя",
+                        yaxis_title="Загрузка (%)",
+                        showlegend=False,
+                        height=400,
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
+                        font=dict(family="Segoe UI, Inter, sans-serif", size=12, color="#323130")
+                    )
+                    
+                    st.plotly_chart(fig_timeline, use_container_width=True)
+            
+            # Интерактивная замена специалистов
+            if analysis['overloaded']:
+                st.markdown("---")
+                st.markdown("### 🔄 Интерактивная замена специалистов")
+                st.info("Выберите замену для перегруженных специалистов и пересчитайте оптимизацию")
+                
+                for overloaded_resource in analysis['overloaded'][:3]:  # Топ-3 перегруженных
+                    resource_name = overloaded_resource['resource_name']
+                    overload_pct = overloaded_resource['workload_percentage']
+                    
+                    with st.expander(f"⚠️ {resource_name} ({overload_pct:.1f}% перегрузка)"):
+                        st.markdown(f"**Текущая загрузка:** {overload_pct:.1f}%")
+                        st.markdown(f"**Избыток:** {overload_pct - 100:.1f}%")
+                        
+                        # Варианты замены (недоиспользуемые ресурсы)
+                        replacement_options = [r['resource_name'] for r in analysis['underutilized']]
+                        replacement_options.insert(0, "-- Не менять --")
+                        
+                        selected_replacement = st.selectbox(
+                            "Заменить на:",
+                            options=replacement_options,
+                            key=f"replacement_{resource_name}"
+                        )
+                        
+                        if selected_replacement != "-- Не менять --":
+                            if st.button(f"✓ Применить замену {resource_name} → {selected_replacement}", 
+                                       key=f"apply_{resource_name}"):
+                                st.session_state.resource_replacements[resource_name] = selected_replacement
+                                st.success(f"✓ Замена сохранена: {resource_name} → {selected_replacement}")
+                                st.info("💡 Запустите оптимизацию заново для пересчёта с учётом замены")
+                
+                # Показать активные замены
+                if st.session_state.resource_replacements:
+                    st.markdown("**Активные замены:**")
+                    for old_res, new_res in st.session_state.resource_replacements.items():
+                        st.markdown(f"- {old_res} → {new_res}")
+                    
+                    if st.button("🔄 Пересчитать с учётом замен", use_container_width=True):
+                        st.info("💡 Функция в разработке: автоматический пересчёт с учётом замен специалистов")
+            
             # Опции экспорта
+            st.markdown("---")
             st.markdown("### 📥 Экспорт анализа")
             col1, col2 = st.columns(2)
             
