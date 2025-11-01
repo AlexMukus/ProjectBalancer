@@ -18,7 +18,23 @@ python --version
 
 echo.
 echo [2/5] Installing dependencies...
-python -m pip install --upgrade pip
+echo Upgrading pip, wheel, and setuptools...
+python -m pip install --upgrade pip wheel setuptools
+
+echo.
+echo Installing pandas and pyarrow with pre-built binaries...
+echo (This prevents compilation errors on Windows)
+python -m pip install --only-binary :all: pandas pyarrow
+
+if errorlevel 1 (
+    echo ERROR: Failed to install pandas/pyarrow
+    echo Make sure you have 64-bit Python installed
+    pause
+    exit /b 1
+)
+
+echo.
+echo Installing remaining dependencies...
 python -m pip install -r requirements_exe.txt
 
 if errorlevel 1 (
