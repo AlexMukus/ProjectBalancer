@@ -153,6 +153,54 @@ dist\MSProjectAnalyzer.exe
    pyinstaller app.spec --clean --debug all
    ```
 
+### ❌ Ошибка "PackageNotFoundError: No package metadata was found for streamlit"
+**Что это:**
+- Это происходит когда PyInstaller не включил метаданные библиотек (version info)
+- Streamlit проверяет версию при запуске, и если метаданных нет - падает с этой ошибкой
+
+**Решение:**
+Файл `app.spec` уже содержит исправление - строки `copy_metadata()` для всех библиотек:
+```python
+# Добавить метаданные пакетов (решает ошибку PackageNotFoundError)
+datas += copy_metadata('streamlit')
+datas += copy_metadata('pandas')
+datas += copy_metadata('plotly')
+...
+```
+
+Если ошибка всё равно появляется:
+1. Убедитесь что используете последнюю версию `app.spec` из проекта
+2. Пересоберите .exe заново:
+   ```cmd
+   rd /s /q build dist
+   pyinstaller app.spec --clean
+   ```
+3. Проверьте что все библиотеки установлены:
+   ```cmd
+   python -m pip list
+   ```
+
+### ❌ Ошибка при установке pandas/pyarrow (cmake failed, subprocess-exited-with-error)
+**Что это:**
+- Windows пытается скомпилировать библиотеки из исходников, но не хватает компилятора
+
+**Решение:**
+1. **Сначала попробуйте:** Установить готовые wheel-файлы:
+   ```cmd
+   python -m pip install --upgrade pip wheel setuptools
+   python -m pip install --only-binary :all: pyarrow pandas
+   python -m pip install streamlit lxml plotly reportlab openpyxl python-dateutil fpdf pyinstaller
+   ```
+
+2. **Если не помогло:** Проверьте что у вас **64-битный Python**:
+   ```cmd
+   python -c "import platform; print(platform.architecture())"
+   ```
+   Должно показать: `('64bit', 'WindowsPE')`  
+   Если показывает `32bit` - переустановите Python 64-bit с [python.org](https://www.python.org/downloads/)
+
+3. **Последний вариант:** Установите [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+
 ---
 
 ## Распространение .exe файла

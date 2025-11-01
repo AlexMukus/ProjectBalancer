@@ -2,7 +2,7 @@
 # PyInstaller spec file для сборки Streamlit приложения в .exe
 
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 # Собрать все скрытые импорты для Streamlit и зависимостей
 hiddenimports = [
@@ -39,6 +39,21 @@ hiddenimports += collect_submodules('altair')
 datas = []
 datas += collect_data_files('streamlit')
 datas += collect_data_files('altair')
+
+# Добавить метаданные пакетов (решает ошибку PackageNotFoundError)
+datas += copy_metadata('streamlit')
+datas += copy_metadata('pandas')
+datas += copy_metadata('plotly')
+datas += copy_metadata('altair')
+datas += copy_metadata('lxml')
+datas += copy_metadata('reportlab')
+datas += copy_metadata('openpyxl')
+datas += copy_metadata('python-dateutil')
+datas += copy_metadata('pyarrow')
+datas += copy_metadata('click')
+datas += copy_metadata('validators')
+datas += copy_metadata('watchdog')
+datas += copy_metadata('tornado')
 
 # Добавить файлы проекта
 datas += [('app.py', '.')]
