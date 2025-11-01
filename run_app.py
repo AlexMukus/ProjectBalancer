@@ -14,18 +14,14 @@ if __name__ == '__main__':
     else:
         # Если запущено напрямую через Python
         application_path = os.path.dirname(os.path.abspath(__file__))
-    
+
     app_path = os.path.join(application_path, 'app.py')
-    
+
     # Настроить аргументы для Streamlit CLI
     sys.argv = [
-        "streamlit",
-        "run",
-        app_path,
-        "--server.port=8501",
-        "--server.headless=true",
+        "streamlit", "run", app_path, "--server.headless=true",
         "--browser.gatherUsageStats=false"
     ]
-    
+
     # Запустить Streamlit
     sys.exit(stcli.main())
