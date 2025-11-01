@@ -5,17 +5,21 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 
 ## Recent Changes (November 1, 2025)
 
-**Latest Fix (.exe Build - PackageNotFoundError - November 1, 2025):**
+**Latest Fix (.exe Build - PackageNotFoundError & Compilation Errors - November 1, 2025):**
 - **Problem Solved**: Fixed critical `importlib.metadata.PackageNotFoundError` when running MSProjectAnalyzer.exe
 - **Root Cause**: PyInstaller wasn't including package metadata (version info) that Streamlit checks at runtime
 - **Solution Implemented**:
   - Updated `app.spec`: Added `copy_metadata()` calls for all libraries (streamlit, pandas, plotly, altair, lxml, reportlab, openpyxl, python-dateutil, pyarrow, click, validators, watchdog, tornado)
+  - Updated `build_exe.bat`: 
+    - Added `--only-binary :all:` for pandas and pyarrow installation (prevents Windows compilation errors)
+    - Separated dependency installation: first pip/wheel/setuptools upgrade, then pandas/pyarrow binaries, then remaining packages
+    - Added clear error messages and 64-bit Python verification hints
   - Updated `BUILD_INSTRUCTIONS.md`: Added troubleshooting sections for:
     - PackageNotFoundError with clear explanation and rebuild steps
     - Windows compilation errors (pandas/pyarrow) with --only-binary solutions
     - 64-bit Python verification and Microsoft C++ Build Tools guidance
-- **Testing**: Architect-reviewed, ready for user rebuild with `build_exe.bat`
-- **Files Modified**: app.spec (added copy_metadata imports and calls), BUILD_INSTRUCTIONS.md (added 2 new troubleshooting sections)
+- **Testing**: Architect-reviewed, user successfully built .exe after fixes
+- **Files Modified**: app.spec (copy_metadata), build_exe.bat (--only-binary installation), BUILD_INSTRUCTIONS.md (troubleshooting)
 
 **Previous Enhancement (Display Mode Switcher - October 31, 2025):**
 - **Display Mode Toggle**: Added switchable display mode for workload visualization with two options:
