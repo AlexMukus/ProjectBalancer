@@ -1,67 +1,66 @@
 @echo off
-chcp 65001 > nul
 echo ========================================
-echo Сборка MS Project Analyzer в .exe файл
+echo Building MS Project Analyzer to .exe
 echo ========================================
 echo.
 
-REM Проверка наличия Python
+REM Check if Python is installed
 python --version > nul 2>&1
 if errorlevel 1 (
-    echo ОШИБКА: Python не установлен или не добавлен в PATH
-    echo Установите Python 3.10 или выше с сайта python.org
+    echo ERROR: Python is not installed or not in PATH
+    echo Install Python 3.10+ from python.org
     pause
     exit /b 1
 )
 
-echo [1/5] Проверка Python установлен...
+echo [1/5] Checking Python installation...
 python --version
 
 echo.
-echo [2/5] Установка зависимостей...
+echo [2/5] Installing dependencies...
 python -m pip install --upgrade pip
 python -m pip install -r requirements_exe.txt
 
 if errorlevel 1 (
-    echo ОШИБКА: Не удалось установить зависимости
+    echo ERROR: Failed to install dependencies
     pause
     exit /b 1
 )
 
 echo.
-echo [3/5] Очистка предыдущей сборки...
+echo [3/5] Cleaning previous build...
 if exist "build" rd /s /q "build"
 if exist "dist" rd /s /q "dist"
 if exist "MSProjectAnalyzer.exe" del /q "MSProjectAnalyzer.exe"
 
 echo.
-echo [4/5] Запуск PyInstaller...
-echo Это может занять несколько минут...
+echo [4/5] Running PyInstaller...
+echo This may take several minutes...
 pyinstaller app.spec --clean
 
 if errorlevel 1 (
-    echo ОШИБКА: Сборка не удалась
+    echo ERROR: Build failed
     pause
     exit /b 1
 )
 
 echo.
-echo [5/5] Перемещение .exe файла...
+echo [5/5] Moving .exe file...
 if exist "dist\MSProjectAnalyzer.exe" (
     move "dist\MSProjectAnalyzer.exe" "MSProjectAnalyzer.exe"
     echo.
     echo ========================================
-    echo УСПЕШНО! Файл создан: MSProjectAnalyzer.exe
+    echo SUCCESS! File created: MSProjectAnalyzer.exe
     echo ========================================
     echo.
-    echo Размер файла:
+    echo File size:
     dir MSProjectAnalyzer.exe | find "MSProjectAnalyzer.exe"
     echo.
-    echo Для запуска: дважды кликните по MSProjectAnalyzer.exe
-    echo Приложение откроется в браузере автоматически
+    echo To run: double-click MSProjectAnalyzer.exe
+    echo The app will open in your browser automatically
 ) else (
-    echo ОШИБКА: Файл MSProjectAnalyzer.exe не найден в dist\
-    echo Проверьте логи PyInstaller выше
+    echo ERROR: MSProjectAnalyzer.exe not found in dist\
+    echo Check PyInstaller logs above
 )
 
 echo.
