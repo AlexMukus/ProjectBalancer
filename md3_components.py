@@ -41,9 +41,10 @@ MD3_COLORS = {
 
 def get_md3_css():
     """Возвращает CSS стили для темы Material Design 3"""
-    return f"""
+    return """
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+        /* Используем системные шрифты для работы в .exe (без внешних зависимостей) */
+        /* Roboto будет использован если доступен, иначе fallback на системные шрифты */
         
         /* MD3 Color Variables */
         :root {{
@@ -80,7 +81,7 @@ def get_md3_css():
         
         /* MD3 Typography Scale */
         .md3-display-large {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 57px;
             font-weight: 400;
             line-height: 64px;
@@ -88,7 +89,7 @@ def get_md3_css():
         }}
         
         .md3-display-medium {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 45px;
             font-weight: 400;
             line-height: 52px;
@@ -96,7 +97,7 @@ def get_md3_css():
         }}
         
         .md3-display-small {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 36px;
             font-weight: 400;
             line-height: 44px;
@@ -104,7 +105,7 @@ def get_md3_css():
         }}
         
         .md3-headline-large {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 32px;
             font-weight: 400;
             line-height: 40px;
@@ -112,7 +113,7 @@ def get_md3_css():
         }}
         
         .md3-headline-medium {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 28px;
             font-weight: 400;
             line-height: 36px;
@@ -120,7 +121,7 @@ def get_md3_css():
         }}
         
         .md3-headline-small {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 24px;
             font-weight: 400;
             line-height: 32px;
@@ -128,7 +129,7 @@ def get_md3_css():
         }}
         
         .md3-title-large {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 22px;
             font-weight: 400;
             line-height: 28px;
@@ -136,7 +137,7 @@ def get_md3_css():
         }}
         
         .md3-title-medium {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 16px;
             font-weight: 500;
             line-height: 24px;
@@ -144,7 +145,7 @@ def get_md3_css():
         }}
         
         .md3-title-small {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 14px;
             font-weight: 500;
             line-height: 20px;
@@ -152,7 +153,7 @@ def get_md3_css():
         }}
         
         .md3-body-large {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 16px;
             font-weight: 400;
             line-height: 24px;
@@ -160,7 +161,7 @@ def get_md3_css():
         }}
         
         .md3-body-medium {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 14px;
             font-weight: 400;
             line-height: 20px;
@@ -168,7 +169,7 @@ def get_md3_css():
         }}
         
         .md3-body-small {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 12px;
             font-weight: 400;
             line-height: 16px;
@@ -176,7 +177,7 @@ def get_md3_css():
         }}
         
         .md3-label-large {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 14px;
             font-weight: 500;
             line-height: 20px;
@@ -184,7 +185,7 @@ def get_md3_css():
         }}
         
         .md3-label-medium {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 12px;
             font-weight: 500;
             line-height: 16px;
@@ -192,7 +193,7 @@ def get_md3_css():
         }}
         
         .md3-label-small {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 11px;
             font-weight: 500;
             line-height: 16px;
@@ -202,13 +203,13 @@ def get_md3_css():
         /* MD3 App Styling */
         .stApp {{
             background-color: var(--md-sys-color-background);
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
         }}
         
         /* MD3 Headers */
         h1 {{
             color: var(--md-sys-color-on-background);
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 28px;
             font-weight: 400;
             line-height: 36px;
@@ -216,7 +217,7 @@ def get_md3_css():
         
         h2 {{
             color: var(--md-sys-color-on-background);
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 24px;
             font-weight: 400;
             line-height: 32px;
@@ -224,7 +225,7 @@ def get_md3_css():
         
         h3 {{
             color: var(--md-sys-color-on-background);
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 22px;
             font-weight: 400;
             line-height: 28px;
@@ -253,7 +254,7 @@ def get_md3_css():
             border: none;
             border-radius: 20px;
             padding: 10px 24px;
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
@@ -274,7 +275,7 @@ def get_md3_css():
             border: 1px solid var(--md-sys-color-outline);
             border-radius: 20px;
             padding: 10px 24px;
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
@@ -291,7 +292,7 @@ def get_md3_css():
             border: none;
             border-radius: 20px;
             padding: 10px 12px;
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
@@ -304,7 +305,7 @@ def get_md3_css():
         
         /* MD3 Dataframe Styling */
         .dataframe {{
-            font-family: 'Roboto', sans-serif;
+            font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             font-size: 14px;
             border-radius: 12px;
             overflow: hidden;

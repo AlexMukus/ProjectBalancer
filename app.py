@@ -2287,5 +2287,7 @@ def main():
             
             st.plotly_chart(fig, use_container_width=True)
 
-if __name__ == "__main__":
-    main()
+# Вызов main() для Streamlit - должен выполняться при импорте модуля
+# НЕ используем if __name__ == "__main__", потому что Streamlit импортирует модуль
+# и __name__ будет "app", а не "__main__"
+main()
