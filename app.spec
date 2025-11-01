@@ -18,6 +18,9 @@ hiddenimports = [
     'reportlab.pdfgen',
     'reportlab.lib',
     'reportlab.lib.pagesizes',
+    'reportlab.lib.styles',
+    'reportlab.lib.units',
+    'reportlab.platypus',
     'reportlab.pdfbase',
     'reportlab.pdfbase.ttfonts',
     'openpyxl',
@@ -29,16 +32,21 @@ hiddenimports = [
     'watchdog',
     'tornado',
     'tzdata',
+    'PIL',
+    'PIL.Image',
 ]
 
 # Собрать все подмодули Streamlit
 hiddenimports += collect_submodules('streamlit')
 hiddenimports += collect_submodules('altair')
+hiddenimports += collect_submodules('reportlab')
 
 # Собрать файлы данных Streamlit
 datas = []
 datas += collect_data_files('streamlit')
 datas += collect_data_files('altair')
+datas += collect_data_files('PIL')
+datas += collect_data_files('reportlab')
 
 # Добавить метаданные пакетов (решает ошибку PackageNotFoundError)
 datas += copy_metadata('streamlit')
@@ -54,6 +62,7 @@ datas += copy_metadata('click')
 datas += copy_metadata('validators')
 datas += copy_metadata('watchdog')
 datas += copy_metadata('tornado')
+datas += copy_metadata('Pillow')
 
 # Добавить файлы проекта
 datas += [('app.py', '.')]
@@ -71,7 +80,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['matplotlib', 'tkinter', 'PIL'],  # Исключить ненужные библиотеки
+    excludes=['matplotlib', 'tkinter'],  # Исключить ненужные библиотеки (PIL нужен для Streamlit)
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

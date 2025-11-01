@@ -22,26 +22,88 @@ echo Upgrading pip, wheel, and setuptools...
 python -m pip install --upgrade pip wheel setuptools
 
 echo.
+echo Installing numpy with pre-built binaries (must be first)...
+echo (This prevents compilation errors on Windows - no C++ compiler needed)
+python -m pip install --only-binary :all: --upgrade numpy
+
+if errorlevel 1 (
+    echo ERROR: Failed to install numpy from pre-built binaries
+    echo This usually means no compatible wheel is available for your Python version
+    echo Python version info:
+    python --version
+    python -c "import platform; print('Architecture:', platform.architecture()[0])"
+    echo.
+    echo Solutions:
+    echo 1. Try installing a compatible Python version (3.10, 3.11, 3.12 recommended)
+    echo 2. Install Microsoft Visual C++ Build Tools to compile from source:
+    echo    https://visualstudio.microsoft.com/visual-cpp-build-tools/
+    pause
+    exit /b 1
+)
+
+echo Verifying numpy installation...
+python -c "import numpy; print('numpy version:', numpy.__version__)" || (
+    echo ERROR: numpy installation verification failed
+    pause
+    exit /b 1
+)
+
+echo.
 echo Installing pandas and pyarrow with pre-built binaries...
-echo (This prevents compilation errors on Windows)
-python -m pip install --only-binary :all: pandas pyarrow
+python -m pip install --only-binary :all: --upgrade pandas pyarrow
 
 if errorlevel 1 (
     echo ERROR: Failed to install pandas/pyarrow
-    echo Make sure you have 64-bit Python installed
+    echo numpy is already installed, but pandas/pyarrow failed
+    echo Try manually: python -m pip install --only-binary :all: --upgrade pandas pyarrow
     pause
     exit /b 1
 )
 
 echo.
 echo Installing remaining dependencies...
-python -m pip install -r requirements_exe.txt
+echo (Skipping numpy, pandas, pyarrow as they are already installed)
+echo Creating temporary requirements file without numpy, pandas, pyarrow...
 
+REM Создаем временный файл requirements без numpy, pandas, pyarrow
+python -c "import sys; lines = open('requirements_exe.txt').readlines(); filtered = [l for l in lines if not any(x in l.lower() for x in ['numpy', 'pandas', 'pyarrow'])]; open('requirements_temp.txt', 'w').writelines(filtered)"
+
+echo.
+echo Installing remaining packages with pre-built binaries...
+echo (numpy, pandas, pyarrow are already installed and will be skipped)
+python -m pip install --only-binary :all: -r requirements_temp.txt
+
+REM Если установка с --only-binary не удалась, пробуем без этого флага
 if errorlevel 1 (
-    echo ERROR: Failed to install dependencies
-    pause
-    exit /b 1
+    echo.
+    echo WARNING: Some packages could not be installed with pre-built binaries
+    echo Trying to install remaining dependencies without --only-binary flag...
+    echo (This may attempt to reinstall numpy/pandas/pyarrow from source if needed)
+    python -m pip install -r requirements_temp.txt
+    
+    REM Проверяем, что numpy все еще работает
+    python -c "import numpy; print('numpy version:', numpy.__version__)" || (
+        echo ERROR: numpy was broken during dependency installation
+        echo Reinstalling numpy from pre-built binaries...
+        python -m pip install --only-binary :all: --force-reinstall numpy
+    )
+    
+    if errorlevel 1 (
+        echo ERROR: Failed to install dependencies
+        echo.
+        echo Solutions:
+        echo 1. Make sure you have 64-bit Python installed
+        echo 2. Install Microsoft Visual C++ Build Tools from:
+        echo    https://visualstudio.microsoft.com/visual-cpp-build-tools/
+        echo 3. Or try installing packages one by one to identify the problem
+        del requirements_temp.txt 2>nul
+        pause
+        exit /b 1
+    )
 )
+
+REM Удаляем временный файл
+del requirements_temp.txt 2>nul
 
 echo.
 echo [3/5] Cleaning previous build...
