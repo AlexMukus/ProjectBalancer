@@ -17,8 +17,14 @@ if __name__ == '__main__':
 
     app_path = os.path.join(application_path, 'app.py')
 
-    # Настроить аргументы для Streamlit CLI (минимальная конфигурация для .exe)
-    sys.argv = ["streamlit", "run", app_path]
+    # Настроить аргументы для Streamlit CLI
+    # Отключаем режим разработки и используем настройки из config.toml для порта
+    sys.argv = [
+        "streamlit", "run", app_path,
+        "--global.developmentMode=false",
+        "--server.headless=true",
+        "--browser.gatherUsageStats=false"
+    ]
 
     # Запустить Streamlit
     sys.exit(stcli.main())
