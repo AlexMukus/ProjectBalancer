@@ -1609,19 +1609,12 @@ def main():
                 st.markdown("<br>", unsafe_allow_html=True)
                 show_all = st.checkbox("Показать всех", value=True)
             
-            # Фильтрация данных
+            # Фильтрация данных по поиску
             if show_all or not search_term:
                 filtered_data = workload_data
             else:
                 filtered_data = [item for item in workload_data 
                                if search_term.lower() in item['resource_name'].lower()]
-            
-            # Применить группу если выбрана
-            if st.session_state.applied_group:
-                group_name, group_resources = st.session_state.applied_group
-                filtered_data = [item for item in filtered_data 
-                               if item['resource_name'] in group_resources]
-                st.info(f"📌 Применена группа '{group_name}' ({len(group_resources)} чел.)")
             
             if not filtered_data:
                 st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
@@ -1630,13 +1623,17 @@ def main():
             else:
                 # Определить default значения для multiselect
                 if st.session_state.applied_group:
-                    # Если группа применена, выбрать всех из группы
-                    default_resources = [item['resource_name'] for item in filtered_data]
+                    # Группа применена: использовать ресурсы из группы как default (но не ограничивать options)
+                    group_name, group_resources = st.session_state.applied_group
+                    st.info(f"📌 Применена группа '{group_name}' ({len(group_resources)} чел.). Вы можете добавить дополнительные ресурсы из списка ниже.")
+                    # Default - только ресурсы из группы, которые есть в filtered_data
+                    default_resources = [name for name in group_resources 
+                                       if name in [item['resource_name'] for item in filtered_data]]
                 else:
-                    # Иначе выбрать всех из filtered_data
+                    # Группа не применена: выбрать всех из filtered_data
                     default_resources = [item['resource_name'] for item in filtered_data]
                 
-                # Множественный выбор
+                # Множественный выбор - options всегда содержат ВСЕ ресурсы из filtered_data
                 selected_resources = st.multiselect(
                     "Выберите конкретные ресурсы для анализа:",
                     options=[item['resource_name'] for item in filtered_data],
@@ -1724,13 +1721,12 @@ def main():
                 st.markdown("---")
                 st.markdown("**Управление группами:**")
                 for group_name in list(st.session_state.resource_groups.keys()):
+                    group_members = st.session_state.resource_groups[group_name]
+                    
+                    # Заголовок группы с кнопкой удаления
                     col1, col2 = st.columns([4, 1])
                     with col1:
-                        resources_preview = ', '.join(st.session_state.resource_groups[group_name][:3])
-                        if len(st.session_state.resource_groups[group_name]) > 3:
-                            resources_preview += '...'
-                        st.markdown(f"**{group_name}** ({len(st.session_state.resource_groups[group_name])} чел.)")
-                        st.caption(resources_preview)
+                        st.markdown(f"**{group_name}** ({len(group_members)} чел.)")
                     with col2:
                         if st.button("🗑️", key=f"delete_{group_name}", help=f"Удалить группу '{group_name}'"):
                             del st.session_state.resource_groups[group_name]
@@ -1738,6 +1734,17 @@ def main():
                                 st.session_state.applied_group = None
                             st.success(f"✓ Группа '{group_name}' удалена")
                             st.rerun()
+                    
+                    # Expander с полным составом группы
+                    with st.expander(f"👁️ Просмотр состава группы '{group_name}'"):
+                        if len(group_members) > 0:
+                            # Вывести всех участников в виде нумерованного списка
+                            for idx, member in enumerate(group_members, 1):
+                                st.text(f"{idx}. {member}")
+                        else:
+                            st.caption("Группа пуста")
+                    
+                    st.markdown("")  # Добавить отступ между группами
         
         st.markdown("---")
         
