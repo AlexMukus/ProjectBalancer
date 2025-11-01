@@ -113,7 +113,7 @@ class MSProjectParser:
         return resources
     
     def _parse_tasks(self, root, namespace):
-        """Parse task information"""
+        """Parse task information including dependencies"""
         tasks = []
         task_elements = root.findall('.//ns:Task', namespace) if namespace else root.findall('.//Task')
         
@@ -122,13 +122,22 @@ class MSProjectParser:
             name = self._get_text(task, 'ns:Name' if namespace else 'Name', namespace)
             
             if task_id and name:
+                # Парсинг зависимостей задач (PredecessorLink)
+                predecessors = []
+                pred_links = task.findall('.//ns:PredecessorLink', namespace) if namespace else task.findall('.//PredecessorLink')
+                for pred in pred_links:
+                    pred_uid = self._get_text(pred, 'ns:PredecessorUID' if namespace else 'PredecessorUID', namespace)
+                    if pred_uid:
+                        predecessors.append(pred_uid)
+                
                 tasks.append({
                     'id': task_id,
                     'name': name,
                     'start': self._get_text(task, 'ns:Start' if namespace else 'Start', namespace),
                     'finish': self._get_text(task, 'ns:Finish' if namespace else 'Finish', namespace),
                     'duration': self._get_text(task, 'ns:Duration' if namespace else 'Duration', namespace),
-                    'work': self._get_text(task, 'ns:Work' if namespace else 'Work', namespace)
+                    'work': self._get_text(task, 'ns:Work' if namespace else 'Work', namespace),
+                    'predecessors': predecessors  # Список ID предшествующих задач
                 })
         
         return tasks
@@ -516,6 +525,176 @@ def analyze_workload(workload_data):
     
     return analysis
 
+def check_task_dependencies(task_id, new_start, new_end, parser, task_dict):
+    """
+    Проверяет, что сдвиг задачи не нарушает зависимости с предшественниками
+    
+    Returns:
+        (is_valid, blocking_tasks) - можно ли сдвинуть и список блокирующих задач
+    """
+    task = task_dict.get(task_id)
+    if not task or not task.get('predecessors'):
+        return True, []  # Нет зависимостей - можно сдвигать
+    
+    blocking_tasks = []
+    
+    # Проверить все предшественники
+    for pred_id in task['predecessors']:
+        pred_task = task_dict.get(pred_id)
+        if not pred_task or not pred_task.get('finish'):
+            continue
+        
+        pred_end = parser._parse_date(pred_task['finish'])
+        if not pred_end:
+            continue
+        
+        # Проверить, что предшественник завершился до начала задачи
+        # (простая зависимость Finish-to-Start)
+        if new_start < pred_end:
+            blocking_tasks.append({
+                'id': pred_id,
+                'name': pred_task.get('name', 'Unknown'),
+                'finish': pred_end.strftime('%Y-%m-%d'),
+                'required_start': pred_end.strftime('%Y-%m-%d')
+            })
+    
+    return len(blocking_tasks) == 0, blocking_tasks
+
+
+def calculate_precise_improvement(task_info, source_week, target_week, shift_days, 
+                                   task_start, task_end, task_hours, weeks_with_dates, weekly_loads):
+    """
+    Точный расчет улучшения с учетом частичных перекрытий задачи с неделями
+    
+    Returns:
+        (improvement_percentage, hours_removed, hours_added, is_valid)
+    """
+    new_start = task_start + timedelta(days=shift_days)
+    new_end = task_end + timedelta(days=shift_days)
+    
+    # Точный расчет: сколько часов задачи было в исходной неделе
+    source_overlap_start = max(task_start, source_week['start'])
+    source_overlap_end = min(task_end, source_week['end'])
+    
+    if source_overlap_start > source_overlap_end:
+        return 0, 0, 0, False
+    
+    task_duration_days = (task_end - task_start).days + 1
+    source_overlap_days = (source_overlap_end - source_overlap_start).days + 1
+    source_proportion = source_overlap_days / task_duration_days if task_duration_days > 0 else 0
+    hours_removed_from_source = task_hours * source_proportion
+    
+    # Точный расчет: сколько часов задачи будет в целевой неделе
+    target_overlap_start = max(new_start, target_week['start'])
+    target_overlap_end = min(new_end, target_week['end'])
+    
+    if target_overlap_start > target_overlap_end:
+        return 0, 0, 0, False
+    
+    target_overlap_days = (target_overlap_end - target_overlap_start).days + 1
+    target_proportion = target_overlap_days / task_duration_days if task_duration_days > 0 else 0
+    hours_added_to_target = task_hours * target_proportion
+    
+    # Рассчитать новую загрузку
+    new_source_hours = source_week['hours'] - hours_removed_from_source
+    new_source_percentage = (new_source_hours / source_week['capacity']) * 100 if source_week['capacity'] > 0 else 0
+    
+    new_target_hours = target_week['hours'] + hours_added_to_target
+    new_target_percentage = (new_target_hours / target_week['capacity']) * 100 if target_week['capacity'] > 0 else 0
+    
+    # Проверка валидности
+    is_valid = (new_source_percentage < source_week['percentage'] and 
+                new_target_percentage <= 100)
+    
+    improvement = source_week['percentage'] - new_source_percentage if is_valid else 0
+    
+    return improvement, hours_removed_from_source, hours_added_to_target, is_valid
+
+
+def binary_search_optimal_shift(task_info, source_week, target_week_idx, weekly_loads, 
+                                  weeks_with_dates, parser, task_dict, max_shift, week_idx):
+    """
+    Бинарный поиск оптимального сдвига вместо линейного перебора
+    
+    Returns:
+        (best_shift, best_improvement) or (None, 0)
+    """
+    task = task_info['task']
+    task_start = task_info['start']
+    task_end = task_info['end']
+    task_hours = task_info['hours']
+    
+    if target_week_idx >= len(weekly_loads) or target_week_idx == week_idx:
+        return None, 0
+    
+    target_week = weekly_loads[target_week_idx]
+    
+    # Проверка зависимостей для граничного случая
+    new_start_max = task_start + timedelta(days=max_shift)
+    new_end_max = task_end + timedelta(days=max_shift)
+    is_valid_max, _ = check_task_dependencies(task['id'], new_start_max, new_end_max, parser, task_dict)
+    
+    if not is_valid_max:
+        # Если максимальный сдвиг нарушает зависимости, ищем меньший
+        left, right = 1, max_shift
+        best_shift = None
+        best_improvement = 0
+        
+        while left <= right:
+            mid = (left + right) // 2
+            new_start = task_start + timedelta(days=mid)
+            new_end = task_end + timedelta(days=mid)
+            
+            is_valid, _ = check_task_dependencies(task['id'], new_start, new_end, parser, task_dict)
+            improvement, _, _, valid_shift = calculate_precise_improvement(
+                task_info, source_week, target_week, mid,
+                task_start, task_end, task_hours, weeks_with_dates, weekly_loads
+            )
+            
+            if is_valid and valid_shift and improvement > best_improvement:
+                best_shift = mid
+                best_improvement = improvement
+                # Пробуем больший сдвиг
+                left = mid + 1
+            else:
+                # Меньший сдвиг
+                right = mid - 1
+        
+        return best_shift, best_improvement
+    
+    # Если зависимости не нарушаются, ищем оптимальный сдвиг бинарным поиском
+    left, right = 1, max_shift
+    best_shift = None
+    best_improvement = 0
+    
+    while left <= right:
+        mid = (left + right) // 2
+        
+        improvement, _, _, is_valid = calculate_precise_improvement(
+            task_info, source_week, target_week, mid,
+            task_start, task_end, task_hours, weeks_with_dates, weekly_loads
+        )
+        
+        if is_valid and improvement > best_improvement:
+            best_shift = mid
+            best_improvement = improvement
+        
+        # Если улучшение растет, пробуем больший сдвиг, иначе меньший
+        if mid < max_shift:
+            next_improvement, _, _, next_valid = calculate_precise_improvement(
+                task_info, source_week, target_week, mid + 1,
+                task_start, task_end, task_hours, weeks_with_dates, weekly_loads
+            )
+            if next_valid and next_improvement > improvement:
+                left = mid + 1
+            else:
+                right = mid - 1
+        else:
+            break
+    
+    return best_shift, best_improvement
+
+
 def optimize_with_task_shifting(parser, settings, date_range_start=None, date_range_end=None, selected_resources=None):
     """
     Оптимизация распределения с смещением задач во времени
@@ -640,8 +819,33 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
                     'hours': task_hours
                 })
             
+            # Приоритизация задач: сортировка по влиянию на перегрузку
+            # Влияние = (часы задачи в неделе) * (процент перегрузки недели)
+            def calculate_task_impact(task_info):
+                task_start = task_info['start']
+                task_end = task_info['end']
+                
+                # Найти долю задачи в перегруженной неделе
+                overlap_start = max(task_start, week_start)
+                overlap_end = min(task_end, week_end)
+                
+                if overlap_start > overlap_end:
+                    return 0
+                
+                task_duration_days = (task_end - task_start).days + 1
+                overlap_days = (overlap_end - overlap_start).days + 1
+                proportion = overlap_days / task_duration_days if task_duration_days > 0 else 0
+                hours_in_week = task_info['hours'] * proportion
+                
+                # Влияние = часы в неделе * уровень перегрузки
+                impact = hours_in_week * week_data['percentage']
+                return impact
+            
+            # Сортировка по влиянию (наибольшее влияние первым)
+            tasks_in_week.sort(key=calculate_task_impact, reverse=True)
+            
             # Попробовать сдвинуть задачи в недозагруженные периоды
-            for task_info in sorted(tasks_in_week, key=lambda x: x['hours'], reverse=True):
+            for task_info in tasks_in_week:
                 task = task_info['task']
                 task_start = task_info['start']
                 task_end = task_info['end']
@@ -649,70 +853,79 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
                 
                 best_shift = None
                 best_improvement = 0
+                best_target_week_idx = None
                 
-                # Проверить все возможные сдвиги
-                for shift_days in range(1, max_shift + 1):
-                    new_start = task_start + timedelta(days=shift_days)
-                    new_end = task_end + timedelta(days=shift_days)
-                    
-                    # Найти все недели, в которые попадёт сдвинутая задача
-                    overlapping_weeks = []
-                    for week_info in weeks_with_dates:
-                        overlap_start = max(new_start, week_info['start'])
-                        overlap_end = min(new_end, week_info['end'])
+                # Найти подходящие целевые недели (недозагруженные)
+                candidate_target_weeks = []
+                for i, target_week in enumerate(weekly_loads):
+                    if i != week_idx and target_week['percentage'] < target_load:
+                        # Рассчитать потенциальное улучшение для этой недели
+                        new_start_candidate = task_start + timedelta(days=1)
+                        new_end_candidate = task_end + timedelta(days=1)
                         
-                        if overlap_start <= overlap_end:
-                            # Рассчитать долю задачи в этой неделе
-                            task_duration_days = (task_end - task_start).days + 1
-                            overlap_days = (overlap_end - overlap_start).days + 1
-                            proportion = overlap_days / task_duration_days if task_duration_days > 0 else 0
-                            hours_in_week = task_hours * proportion
-                            
-                            overlapping_weeks.append({
-                                'index': week_info['index'],
-                                'hours': hours_in_week,
-                                'proportion': proportion
-                            })
-                    
-                    if not overlapping_weeks:
+                        # Проверить, что сдвинутая задача попадет в эту неделю
+                        for week_info in weeks_with_dates:
+                            if (max(new_start_candidate, week_info['start']) <= 
+                                min(new_end_candidate, week_info['end']) and
+                                week_info['index'] == i):
+                                candidate_target_weeks.append(i)
+                                break
+                
+                # Для каждой целевой недели найти оптимальный сдвиг бинарным поиском
+                for target_week_idx in candidate_target_weeks:
+                    if target_week_idx >= len(weekly_loads):
                         continue
                     
-                    # Выбрать основную целевую неделю (с наибольшей долей задачи)
-                    main_target = max(overlapping_weeks, key=lambda w: w['proportion'])
-                    target_week_idx = main_target['index']
-                    
-                    if target_week_idx == week_idx or target_week_idx >= len(weekly_loads):
-                        continue
-                    
-                    # Проверить, что целевая неделя менее загружена
                     target_week = weekly_loads[target_week_idx]
                     
-                    # Рассчитать реальное улучшение в часах
-                    # Сколько часов освободится в исходной неделе
-                    hours_removed_from_source = task_hours  # Упрощение: вся задача уходит
-                    # Сколько часов добавится в целевую неделю
-                    hours_added_to_target = main_target['hours']
+                    # Бинарный поиск оптимального сдвига
+                    shift, improvement = binary_search_optimal_shift(
+                        task_info, week_data, target_week_idx, weekly_loads,
+                        weeks_with_dates, parser, task_dict, max_shift, week_idx
+                    )
                     
-                    # Проверить, что сдвиг действительно снижает перегрузку
-                    new_source_hours = week_data['hours'] - hours_removed_from_source
-                    new_source_percentage = (new_source_hours / week_data['capacity']) * 100 if week_data['capacity'] > 0 else 0
-                    
-                    new_target_hours = target_week['hours'] + hours_added_to_target
-                    new_target_percentage = (new_target_hours / target_week['capacity']) * 100 if target_week['capacity'] > 0 else 0
-                    
-                    # Условия: исходная неделя становится менее перегруженной, целевая не становится перегруженной
-                    if new_source_percentage < week_data['percentage'] and new_target_percentage <= 100:
-                        # Оценить улучшение как снижение перегрузки
-                        improvement = week_data['percentage'] - new_source_percentage
+                    if shift and improvement > best_improvement:
+                        # Проверить зависимости для найденного сдвига
+                        new_start_check = task_start + timedelta(days=shift)
+                        new_end_check = task_end + timedelta(days=shift)
+                        is_valid, blocking = check_task_dependencies(
+                            task['id'], new_start_check, new_end_check, parser, task_dict
+                        )
                         
-                        if improvement > best_improvement:
+                        if is_valid:
                             best_improvement = improvement
-                            best_shift = shift_days
+                            best_shift = shift
+                            best_target_week_idx = target_week_idx
+                        elif shift > 1:
+                            # Если зависимости нарушены, попробовать меньший сдвиг
+                            for smaller_shift in range(1, shift):
+                                new_start_small = task_start + timedelta(days=smaller_shift)
+                                new_end_small = task_end + timedelta(days=smaller_shift)
+                                is_valid_small, _ = check_task_dependencies(
+                                    task['id'], new_start_small, new_end_small, parser, task_dict
+                                )
+                                if is_valid_small:
+                                    improvement_small, _, _, valid = calculate_precise_improvement(
+                                        task_info, week_data, target_week, smaller_shift,
+                                        task_start, task_end, task_hours, weeks_with_dates, weekly_loads
+                                    )
+                                    if valid and improvement_small > best_improvement:
+                                        best_improvement = improvement_small
+                                        best_shift = smaller_shift
+                                        best_target_week_idx = target_week_idx
+                                        break
                 
                 # Если нашли хороший сдвиг, добавляем рекомендацию
-                if best_shift:
+                if best_shift and best_target_week_idx is not None:
                     new_start = task_start + timedelta(days=best_shift)
                     new_end = task_end + timedelta(days=best_shift)
+                    
+                    # Точный расчет для финальной рекомендации
+                    target_week_final = weekly_loads[best_target_week_idx]
+                    _, hours_removed, hours_added, _ = calculate_precise_improvement(
+                        task_info, week_data, target_week_final, best_shift,
+                        task_start, task_end, task_hours, weeks_with_dates, weekly_loads
+                    )
                     
                     optimization_suggestions.append({
                         'type': 'shift_task',
@@ -725,7 +938,9 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
                         'suggested_end': new_end.strftime('%Y-%m-%d'),
                         'shift_days': best_shift,
                         'improvement': f'{best_improvement:.1f}%',
-                        'reason': f'Снизить перегрузку на {excess_hours:.1f}ч в неделю {week_data["week"]}',
+                        'hours_freed': f'{hours_removed:.1f}',
+                        'hours_added': f'{hours_added:.1f}',
+                        'reason': f'Снизить перегрузку на {hours_removed:.1f}ч в неделю {week_data["week"]} (точный расчет)',
                         'priority': 'Высокий' if week_data['percentage'] > 120 else 'Средний'
                     })
                     
