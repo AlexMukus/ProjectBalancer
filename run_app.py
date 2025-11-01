@@ -17,11 +17,8 @@ if __name__ == '__main__':
 
     app_path = os.path.join(application_path, 'app.py')
 
-    # Настроить аргументы для Streamlit CLI
-    sys.argv = [
-        "streamlit", "run", app_path, "--server.headless=true",
-        "--browser.gatherUsageStats=false"
-    ]
+    # Настроить аргументы для Streamlit CLI (минимальная конфигурация для .exe)
+    sys.argv = ["streamlit", "run", app_path]
 
     # Запустить Streamlit
     sys.exit(stcli.main())

@@ -5,11 +5,15 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
 
 ## Recent Changes (November 1, 2025)
 
-**Latest Fix (.exe Build - PackageNotFoundError & Compilation Errors - November 1, 2025):**
-- **Problem Solved**: Fixed critical `importlib.metadata.PackageNotFoundError` when running MSProjectAnalyzer.exe
-- **Root Cause**: PyInstaller wasn't including package metadata (version info) that Streamlit checks at runtime
+**Latest Fix (.exe Build - Configuration Conflicts & 404 Errors - November 1, 2025):**
+- **Problem Solved**: Fixed 404 errors and port conflicts when running MSProjectAnalyzer.exe
+- **Root Causes**: 
+  - PyInstaller wasn't including package metadata (version info) that Streamlit checks at runtime
+  - Conflicting server parameters in run_app.py and .streamlit/config.toml caused port mismatches (server on 8501, URL showing 3000)
 - **Solution Implemented**:
   - Updated `app.spec`: Added `copy_metadata()` calls for all libraries (streamlit, pandas, plotly, altair, lxml, reportlab, openpyxl, python-dateutil, pyarrow, click, validators, watchdog, tornado)
+  - Simplified `run_app.py`: Removed all CLI parameters (--server.headless, --browser.gatherUsageStats), now uses minimal `streamlit run app.py` command
+  - Simplified `.streamlit/config.toml`: Removed address and port settings, kept only headless mode and telemetry opt-out - Streamlit auto-selects port
   - Updated `build_exe.bat`: 
     - Added `--only-binary :all:` for pandas and pyarrow installation (prevents Windows compilation errors)
     - Separated dependency installation: first pip/wheel/setuptools upgrade, then pandas/pyarrow binaries, then remaining packages
@@ -18,8 +22,8 @@ This desktop application, built with Streamlit, analyzes Microsoft Project plan 
     - PackageNotFoundError with clear explanation and rebuild steps
     - Windows compilation errors (pandas/pyarrow) with --only-binary solutions
     - 64-bit Python verification and Microsoft C++ Build Tools guidance
-- **Testing**: Architect-reviewed, user successfully built .exe after fixes
-- **Files Modified**: app.spec (copy_metadata), build_exe.bat (--only-binary installation), BUILD_INSTRUCTIONS.md (troubleshooting)
+- **Testing**: Architect-reviewed, configuration conflicts resolved
+- **Files Modified**: app.spec (copy_metadata), run_app.py (simplified), .streamlit/config.toml (minimal config), build_exe.bat (--only-binary), BUILD_INSTRUCTIONS.md (troubleshooting)
 
 **Previous Enhancement (Display Mode Switcher - October 31, 2025):**
 - **Display Mode Toggle**: Added switchable display mode for workload visualization with two options:
