@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import io
+import json
+import os
 from lxml import etree
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, A4
@@ -15,6 +17,27 @@ from reportlab.pdfbase.ttfonts import TTFont
 # Импорт MD3 компонентов
 from md3_components import get_md3_css, md3_info_panel, get_md3_table_style, get_md3_chart_colors
 
+# Функция для определения базового пути (для frozen и обычного режима)
+def get_base_path():
+    """Определяет базовый путь для frozen и обычного режима"""
+    import sys
+    if getattr(sys, 'frozen', False):
+        # Если запущено через PyInstaller
+        # Базовый путь - директория, где находится .exe
+        if hasattr(sys, 'executable'):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            # Fallback
+            base_path = os.path.dirname(os.path.abspath(__file__))
+    else:
+        # Если запущено напрямую через Python
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    return base_path
+
+# Определить базовый путь
+BASE_PATH = get_base_path()
+
 # Конфигурация страницы
 st.set_page_config(
     page_title="Анализатор управления ресурсами",
@@ -25,6 +48,150 @@ st.set_page_config(
 
 # Применение MD3 дизайна
 st.markdown(get_md3_css(), unsafe_allow_html=True)
+
+# Константа пути к файлу сотрудников (абсолютный путь относительно базовой директории)
+EMPLOYEES_FILE = os.path.join(BASE_PATH, "data", "employees.json")
+
+# Функции для работы с JSON-файлом сотрудников
+def load_employees_data():
+    """Загрузка данных сотрудников и групп из JSON-файла"""
+    try:
+        # Получить актуальный путь (на случай изменения BASE_PATH)
+        employees_file = os.path.join(BASE_PATH, "data", "employees.json")
+        
+        # Создать папку data/ если её нет
+        data_dir = os.path.dirname(employees_file)
+        os.makedirs(data_dir, exist_ok=True)
+        
+        # Если файл существует, загрузить данные
+        if os.path.exists(employees_file):
+            with open(employees_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return {
+                    'resources': data.get('resources', []),
+                    'resource_groups': data.get('resource_groups', {})
+                }
+        else:
+            # Создать файл с пустой структурой
+            default_data = {
+                'resources': [],
+                'resource_groups': {}
+            }
+            with open(employees_file, 'w', encoding='utf-8') as f:
+                json.dump(default_data, f, ensure_ascii=False, indent=2)
+            return default_data
+    except Exception as e:
+        st.error(f"Ошибка при загрузке данных сотрудников: {str(e)}")
+        return {'resources': [], 'resource_groups': {}}
+
+def save_employees_data(resources, resource_groups):
+    """Сохранение данных сотрудников и групп в JSON-файл"""
+    try:
+        # Получить актуальный путь (на случай изменения BASE_PATH)
+        employees_file = os.path.join(BASE_PATH, "data", "employees.json")
+        
+        # Создать папку data/ если её нет
+        data_dir = os.path.dirname(employees_file)
+        os.makedirs(data_dir, exist_ok=True)
+        
+        data = {
+            'resources': resources,
+            'resource_groups': resource_groups
+        }
+        
+        with open(employees_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        st.error(f"Ошибка при сохранении данных сотрудников: {str(e)}")
+        return False
+
+def detect_conflicts(existing_resources, new_resources):
+    """Обнаружение конфликтов между существующими и новыми сотрудниками"""
+    conflicts = []
+    
+    for new_resource in new_resources:
+        new_id = new_resource.get('id', '')
+        new_name = new_resource.get('name', '')
+        
+        # Проверка по ID
+        existing_by_id = next((r for r in existing_resources if r.get('id') == new_id), None)
+        if existing_by_id:
+            conflicts.append({
+                'type': 'id',
+                'existing': existing_by_id,
+                'new': new_resource,
+                'key': new_id
+            })
+            continue
+        
+        # Проверка по имени (если ID разные)
+        existing_by_name = next((r for r in existing_resources if r.get('name') == new_name), None)
+        if existing_by_name:
+            conflicts.append({
+                'type': 'name',
+                'existing': existing_by_name,
+                'new': new_resource,
+                'key': new_name
+            })
+    
+    return conflicts
+
+def merge_resources(existing_resources, new_resources, conflict_resolutions=None):
+    """Объединение списков сотрудников с учетом решений по конфликтам"""
+    if conflict_resolutions is None:
+        conflict_resolutions = {}
+    
+    # Копируем существующих сотрудников
+    merged = existing_resources.copy()
+    
+    # Словарь для быстрого поиска по ID и имени
+    existing_by_id = {r.get('id'): r for r in existing_resources}
+    existing_by_name = {r.get('name'): r for r in existing_resources}
+    
+    for new_resource in new_resources:
+        new_id = new_resource.get('id', '')
+        new_name = new_resource.get('name', '')
+        
+        # Проверяем, есть ли конфликт
+        has_id_conflict = new_id in existing_by_id
+        has_name_conflict = new_name in existing_by_name
+        
+        # Проверяем, есть ли решение для этого конфликта
+        conflict_key = f"{new_id}_{new_name}"
+        resolution = conflict_resolutions.get(conflict_key)
+        
+        if resolution == 'skip':
+            # Пропустить - не добавлять
+            continue
+        elif resolution == 'update':
+            # Обновить существующего
+            if has_id_conflict:
+                # Обновляем по ID
+                index = merged.index(existing_by_id[new_id])
+                merged[index] = new_resource.copy()
+            elif has_name_conflict:
+                # Обновляем по имени
+                index = merged.index(existing_by_name[new_name])
+                merged[index] = new_resource.copy()
+        elif resolution == 'add_new':
+            # Добавить как нового (с другим ID если нужно)
+            if has_id_conflict:
+                # Генерируем новый ID
+                max_id = max([int(r.get('id', '0')) for r in merged if r.get('id', '').isdigit()], default=0)
+                new_resource_copy = new_resource.copy()
+                new_resource_copy['id'] = str(max_id + 1)
+                merged.append(new_resource_copy)
+            else:
+                merged.append(new_resource.copy())
+        else:
+            # По умолчанию: если есть конфликт (по ID или имени), оставляем данные из файла (пропускаем)
+            # Если нет конфликта, добавляем новый ресурс
+            if not has_id_conflict and not has_name_conflict:
+                merged.append(new_resource.copy())
+            # Если есть конфликт и нет явного решения - пропускаем (оставляем из файла)
+    
+    return merged
 
 # MS Project XML Parser
 class MSProjectParser:
@@ -505,6 +672,267 @@ class MSProjectParser:
         
         return max(0, overlap_days), max(0.0, min(1.0, proportion))
 
+# Multi-Project Parser
+class MultiProjectParser:
+    """Парсер для объединения данных из нескольких файлов MS Project"""
+    
+    def __init__(self, parsers):
+        """
+        Инициализация с списком парсеров
+        
+        Args:
+            parsers: список объектов MSProjectParser
+        """
+        self.parsers = parsers if parsers else []
+        self._merged_resources = None
+        self._merged_tasks = None
+        self._merged_assignments = None
+    
+    def get_merged_resources(self):
+        """Объединяет ресурсы из всех парсеров (автоматически по ID/имени)"""
+        if self._merged_resources is not None:
+            return self._merged_resources
+        
+        merged = {}
+        
+        for parser in self.parsers:
+            for resource in parser.resources:
+                resource_id = resource.get('id', '')
+                resource_name = resource.get('name', '')
+                
+                # Сначала проверяем по ID
+                if resource_id and resource_id in merged:
+                    # Ресурс с таким ID уже есть - пропускаем или обновляем
+                    existing = merged[resource_id]
+                    # Обновляем max_units если в новом больше
+                    existing_max = float(existing.get('max_units', 1.0))
+                    new_max = float(resource.get('max_units', 1.0))
+                    if new_max > existing_max:
+                        existing['max_units'] = str(new_max)
+                    continue
+                
+                # Проверяем по имени (если ID нет или отличается)
+                found_by_name = None
+                for key, existing in merged.items():
+                    if existing.get('name') == resource_name:
+                        found_by_name = key
+                        break
+                
+                if found_by_name:
+                    # Ресурс с таким именем уже есть - обновляем max_units
+                    existing = merged[found_by_name]
+                    existing_max = float(existing.get('max_units', 1.0))
+                    new_max = float(resource.get('max_units', 1.0))
+                    if new_max > existing_max:
+                        existing['max_units'] = str(new_max)
+                    continue
+                
+                # Новый ресурс - добавляем
+                if resource_id:
+                    merged[resource_id] = resource.copy()
+                else:
+                    # Если нет ID, используем имя как ключ
+                    merged[resource_name] = resource.copy()
+        
+        self._merged_resources = list(merged.values())
+        return self._merged_resources
+    
+    @property
+    def resources(self):
+        """Объединенные ресурсы из всех парсеров"""
+        return self.get_merged_resources()
+    
+    @resources.setter
+    def resources(self, value):
+        """Установить ресурсы для всех парсеров"""
+        # Обновить ресурсы во всех парсерах
+        for parser in self.parsers:
+            parser.resources = value
+        # Обновить кэш объединенных ресурсов
+        self._merged_resources = value
+    
+    @property
+    def tasks(self):
+        """Объединенные задачи из всех парсеров"""
+        if self._merged_tasks is not None:
+            return self._merged_tasks
+        
+        merged_tasks = []
+        for parser in self.parsers:
+            merged_tasks.extend(parser.tasks)
+        
+        self._merged_tasks = merged_tasks
+        return self._merged_tasks
+    
+    @property
+    def assignments(self):
+        """Объединенные назначения из всех парсеров"""
+        if self._merged_assignments is not None:
+            return self._merged_assignments
+        
+        merged_assignments = []
+        for parser in self.parsers:
+            merged_assignments.extend(parser.assignments)
+        
+        self._merged_assignments = merged_assignments
+        return self._merged_assignments
+    
+    def get_project_dates(self):
+        """Получить минимальную и максимальную даты из всех проектов"""
+        project_start = None
+        project_end = None
+        
+        for parser in self.parsers:
+            start, end = parser.get_project_dates()
+            if start and (project_start is None or start < project_start):
+                project_start = start
+            if end and (project_end is None or end > project_end):
+                project_end = end
+        
+        return project_start, project_end
+    
+    def get_resource_workload_data(self, date_range_start=None, date_range_end=None):
+        """Агрегирует нагрузку из всех проектов"""
+        # Получить данные из всех парсеров
+        all_workload_data = []
+        for parser in self.parsers:
+            workload_data = parser.get_resource_workload_data(date_range_start, date_range_end)
+            all_workload_data.extend(workload_data)
+        
+        # Агрегировать данные по ресурсам
+        aggregated = {}
+        merged_resources = self.get_merged_resources()
+        
+        # Инициализировать агрегированные данные для всех ресурсов
+        for resource in merged_resources:
+            resource_name = resource['name']
+            max_units = float(resource.get('max_units', 1.0))
+            
+            # Рассчитать доступную емкость (как в MSProjectParser)
+            if date_range_start and date_range_end:
+                from datetime import datetime as dt_class
+                range_start_dt = dt_class.combine(date_range_start, dt_class.min.time())
+                range_end_dt = dt_class.combine(date_range_end, dt_class.max.time())
+            else:
+                project_start, project_end = self.get_project_dates()
+                range_start_dt = project_start
+                range_end_dt = project_end
+            
+            if range_start_dt and range_end_dt:
+                range_duration = range_end_dt - range_start_dt
+                calendar_days = range_duration.total_seconds() / (24 * 3600)
+                if calendar_days <= 0:
+                    available_work_hours_base = 8
+                else:
+                    workdays = calendar_days * (5.0 / 7.0)
+                    available_work_hours_base = workdays * 8
+            else:
+                available_work_hours_base = 160
+            
+            max_capacity = available_work_hours_base * max_units
+            project_weeks = available_work_hours_base / 40
+            
+            aggregated[resource_name] = {
+                'resource_name': resource_name,
+                'total_work_hours': 0,
+                'max_capacity': max_capacity,
+                'workload_percentage': 0,
+                'task_count': 0,
+                'tasks': [],
+                'project_weeks': project_weeks
+            }
+        
+        # Агрегировать данные из всех проектов
+        for item in all_workload_data:
+            resource_name = item['resource_name']
+            if resource_name in aggregated:
+                aggregated[resource_name]['total_work_hours'] += item['total_work_hours']
+                aggregated[resource_name]['task_count'] += item['task_count']
+                aggregated[resource_name]['tasks'].extend(item['tasks'])
+        
+        # Пересчитать проценты нагрузки
+        for resource_name, data in aggregated.items():
+            if data['max_capacity'] > 0:
+                data['workload_percentage'] = (data['total_work_hours'] / data['max_capacity']) * 100
+        
+        return list(aggregated.values())
+    
+    def get_timeline_workload(self, date_range_start=None, date_range_end=None):
+        """Объединяет временные данные из всех проектов"""
+        # Получить данные из всех парсеров
+        all_timeline_data = {}
+        for parser in self.parsers:
+            timeline_data = parser.get_timeline_workload(date_range_start, date_range_end)
+            for resource_name, weekly_loads in timeline_data.items():
+                if resource_name not in all_timeline_data:
+                    all_timeline_data[resource_name] = {}
+                
+                # Объединить недельные данные
+                for week_data in weekly_loads:
+                    week_key = week_data['week']
+                    if week_key not in all_timeline_data[resource_name]:
+                        all_timeline_data[resource_name][week_key] = {
+                            'week': week_key,
+                            'week_start': week_data['week_start'],
+                            'week_end': week_data['week_end'],
+                            'hours': 0,
+                            'capacity': week_data['capacity'],
+                            'percentage': 0
+                        }
+                    
+                    all_timeline_data[resource_name][week_key]['hours'] += week_data['hours']
+        
+        # Пересчитать проценты для объединенных данных
+        result = {}
+        for resource_name, weeks_dict in all_timeline_data.items():
+            weekly_loads = []
+            for week_key in sorted(weeks_dict.keys(), key=lambda k: weeks_dict[k]['week_start']):
+                week_data = weeks_dict[week_key]
+                if week_data['capacity'] > 0:
+                    week_data['percentage'] = (week_data['hours'] / week_data['capacity']) * 100
+                weekly_loads.append(week_data)
+            result[resource_name] = weekly_loads
+        
+        return result
+    
+    def _parse_date(self, date_string):
+        """Прокси-метод для парсинга дат (использует первый парсер)"""
+        if self.parsers:
+            return self.parsers[0]._parse_date(date_string)
+        return None
+    
+    def _parse_work_hours(self, work_string):
+        """Прокси-метод для парсинга часов работы (использует первый парсер)"""
+        if self.parsers:
+            return self.parsers[0]._parse_work_hours(work_string)
+        return 0
+    
+    def get_resource_id_mapping(self):
+        """Создает маппинг resource_id -> resource_name для всех парсеров"""
+        mapping = {}
+        for parser in self.parsers:
+            for resource in parser.resources:
+                resource_id = resource.get('id', '')
+                resource_name = resource.get('name', '')
+                if resource_id and resource_name:
+                    mapping[resource_id] = resource_name
+        return mapping
+    
+    def get_assignments_for_resource(self, resource_name):
+        """Получить все назначения для ресурса по имени (работает с объединенными ресурсами)"""
+        assignments = []
+        resource_id_mapping = self.get_resource_id_mapping()
+        
+        # Найти все resource_id, которые соответствуют этому имени
+        resource_ids = [rid for rid, name in resource_id_mapping.items() if name == resource_name]
+        
+        # Найти все назначения с этими resource_id
+        for assignment in self.assignments:
+            if assignment.get('resource_id') in resource_ids:
+                assignments.append(assignment)
+        
+        return assignments
+
 # Analysis functions
 def analyze_workload(workload_data):
     """Analyze workload and categorize resources"""
@@ -744,7 +1172,11 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
         if not resource:
             continue
         
-        resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+        # Для MultiProjectParser использовать специальный метод
+        if isinstance(parser, MultiProjectParser):
+            resource_assignments = parser.get_assignments_for_resource(resource_name)
+        else:
+            resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
         
         # Построить карту недель для быстрого поиска (один раз на ресурс)
         # КРИТИЧНО: Использовать тот же диапазон что и в get_timeline_workload()
@@ -856,20 +1288,12 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
                 best_target_week_idx = None
                 
                 # Найти подходящие целевые недели (недозагруженные)
+                # Принимаем все недозагруженные недели как кандидаты
+                # Бинарный поиск проверит, может ли задача достичь недели с любым сдвигом до max_shift
                 candidate_target_weeks = []
                 for i, target_week in enumerate(weekly_loads):
                     if i != week_idx and target_week['percentage'] < target_load:
-                        # Рассчитать потенциальное улучшение для этой недели
-                        new_start_candidate = task_start + timedelta(days=1)
-                        new_end_candidate = task_end + timedelta(days=1)
-                        
-                        # Проверить, что сдвинутая задача попадет в эту неделю
-                        for week_info in weeks_with_dates:
-                            if (max(new_start_candidate, week_info['start']) <= 
-                                min(new_end_candidate, week_info['end']) and
-                                week_info['index'] == i):
-                                candidate_target_weeks.append(i)
-                                break
+                        candidate_target_weeks.append(i)
                 
                 # Для каждой целевой недели найти оптимальный сдвиг бинарным поиском
                 for target_week_idx in candidate_target_weeks:
@@ -1050,7 +1474,11 @@ def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimi
         
         for resource in parser.resources:
             resource_name = resource['name']
-            resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+            # Для MultiProjectParser использовать специальный метод
+            if isinstance(parser, MultiProjectParser):
+                resource_assignments = parser.get_assignments_for_resource(resource_name)
+            else:
+                resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
             
             for assignment in resource_assignments:
                 task = next((t for t in parser.tasks if t['id'] == assignment['task_id']), None)
@@ -1293,7 +1721,11 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
         
         for resource in parser.resources[:10]:  # Ограничить до 10 ресурсов
             resource_name = resource['name']
-            resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+            # Для MultiProjectParser использовать специальный метод
+            if isinstance(parser, MultiProjectParser):
+                resource_assignments = parser.get_assignments_for_resource(resource_name)
+            else:
+                resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
             
             for assignment in resource_assignments[:5]:  # До 5 задач на ресурс
                 if task_count >= max_tasks:
@@ -1462,6 +1894,17 @@ def calculate_actual_hours_per_resource(parser, date_start, date_end):
     
     resource_hours = {}
     
+    # Работать с MultiProjectParser или обычным MSProjectParser
+    if isinstance(parser, MultiProjectParser):
+        # Для MultiProjectParser агрегировать данные из всех парсеров
+        for single_parser in parser.parsers:
+            single_hours = calculate_actual_hours_per_resource(single_parser, date_start, date_end)
+            for resource_name, hours in single_hours.items():
+                if resource_name not in resource_hours:
+                    resource_hours[resource_name] = 0
+                resource_hours[resource_name] += hours
+        return resource_hours
+    
     # Получить все задачи из parser
     for task in parser.tasks:
         task_start_raw = task.get('start')
@@ -1508,11 +1951,17 @@ def calculate_actual_hours_per_resource(parser, date_start, date_end):
                 continue
                 
             # Найти имя ресурса
-            resource = next((r for r in parser.resources if r['id'] == resource_id), None)
-            if not resource:
-                continue
-                
-            resource_name = resource['name']
+            # Для MultiProjectParser использовать маппинг
+            if isinstance(parser, MultiProjectParser):
+                resource_id_mapping = parser.get_resource_id_mapping()
+                resource_name = resource_id_mapping.get(resource_id)
+                if not resource_name:
+                    continue
+            else:
+                resource = next((r for r in parser.resources if r['id'] == resource_id), None)
+                if not resource:
+                    continue
+                resource_name = resource['name']
             work_hours = parser._parse_work_hours(assignment.get('work', '0'))
             
             # Пропорция задачи в выбранном диапазоне
@@ -1549,8 +1998,19 @@ if 'date_range_start' not in st.session_state:
     st.session_state.date_range_start = None
 if 'date_range_end' not in st.session_state:
     st.session_state.date_range_end = None
-if 'resource_groups' not in st.session_state:
-    st.session_state.resource_groups = {}
+if 'uploaded_files' not in st.session_state:
+    st.session_state.uploaded_files = []  # Список загруженных файлов
+if 'resource_groups' not in st.session_state or 'saved_resources' not in st.session_state:
+    # Загрузить данные из файла при первом запуске
+    employees_data = load_employees_data()
+    if 'resource_groups' not in st.session_state:
+        st.session_state.resource_groups = employees_data.get('resource_groups', {})
+    if 'saved_resources' not in st.session_state:
+        st.session_state.saved_resources = employees_data.get('resources', [])
+if 'conflict_resolutions' not in st.session_state:
+    st.session_state.conflict_resolutions = {}
+if 'pending_conflicts' not in st.session_state:
+    st.session_state.pending_conflicts = []
 if 'display_mode' not in st.session_state:
     st.session_state.display_mode = 'percentage'  # По умолчанию проценты
 
@@ -1588,77 +2048,249 @@ def main():
         
         st.markdown("---")
         
-        st.markdown("### 📁 Загрузка файла MS Project")
+        st.markdown("### 📁 Загрузка файлов MS Project")
         st.markdown("Поддерживаемые форматы: .xml, .mspdi")
         st.info("💡 Чтобы экспортировать .mpp в XML: в MS Project выберите Файл → Сохранить как → выберите Формат XML (*.xml)")
         
-        uploaded_file = st.file_uploader(
-            "Выберите файл",
+        uploaded_files = st.file_uploader(
+            "Выберите файлы",
             type=['xml', 'mspdi'],
-            help="Загрузите ваш XML-файл Microsoft Project"
+            accept_multiple_files=True,
+            help="Загрузите один или несколько XML-файлов Microsoft Project для анализа"
         )
         
-        # Сохранить содержимое файла как байты для надежности при st.rerun()
-        if uploaded_file is not None:
-            st.session_state.uploaded_file_content = uploaded_file.getvalue()
-            st.session_state.uploaded_file_name = uploaded_file.name
+        # Сохранить содержимое файлов как байты для надежности при st.rerun()
+        if uploaded_files is not None and len(uploaded_files) > 0:
+            st.session_state.uploaded_files = [
+                {'name': f.name, 'content': f.getvalue()}
+                for f in uploaded_files
+            ]
+        elif uploaded_files is not None and len(uploaded_files) == 0:
+            # Пользователь очистил загрузку
+            st.session_state.uploaded_files = []
         
-        # Проверить наличие загруженного файла
-        has_file = (uploaded_file is not None) or ('uploaded_file_content' in st.session_state)
+        # Проверить наличие загруженных файлов
+        has_files = (uploaded_files is not None and len(uploaded_files) > 0) or (len(st.session_state.uploaded_files) > 0)
         
-        if has_file:
-            file_name = uploaded_file.name if uploaded_file is not None else st.session_state.get('uploaded_file_name', 'файл')
-            st.success(f"✓ {file_name} загружен")
+        if has_files:
+            if uploaded_files is not None and len(uploaded_files) > 0:
+                file_count = len(uploaded_files)
+                file_names = [f.name for f in uploaded_files]
+            else:
+                file_count = len(st.session_state.uploaded_files)
+                file_names = [f['name'] for f in st.session_state.uploaded_files]
             
-            if st.button("🔄 Анализировать файл", use_container_width=True):
-                with st.spinner("Анализ файла MS Project..."):
-                    # Использовать сохраненное содержимое или прочитать новый файл
-                    if uploaded_file is not None:
-                        file_content = uploaded_file.getvalue()
+            if file_count == 1:
+                st.success(f"✓ {file_names[0]} загружен")
+            else:
+                st.success(f"✓ Загружено файлов: {file_count}")
+                with st.expander("📋 Список загруженных файлов", expanded=False):
+                    for i, name in enumerate(file_names, 1):
+                        st.text(f"{i}. {name}")
+            
+            button_text = "🔄 Анализировать файл" if file_count == 1 else f"🔄 Анализировать {file_count} файлов"
+            if st.button(button_text, use_container_width=True):
+                with st.spinner(f"Анализ {file_count} файл(ов) MS Project..."):
+                    # Получить список файлов для обработки
+                    files_to_process = []
+                    if uploaded_files is not None and len(uploaded_files) > 0:
+                        files_to_process = [{'name': f.name, 'content': f.getvalue()} for f in uploaded_files]
                     else:
-                        file_content = st.session_state.uploaded_file_content
+                        files_to_process = st.session_state.uploaded_files
                     
-                    parser = MSProjectParser(file_content)
-                    
-                    if parser.parse():
-                        st.session_state.parser = parser
-                        # Инициализировать даты проекта на основе текущей даты
-                        today = datetime.now().date()
-                        
-                        # Получить даты проекта для ограничения
-                        project_start, project_end = parser.get_project_dates()
-                        
-                        # Начало: текущая дата - 7 дней, округленная до понедельника
-                        start_candidate = today - timedelta(days=7)
-                        days_since_monday = start_candidate.weekday()
-                        default_start = start_candidate - timedelta(days=days_since_monday)
-                        
-                        # Конец: текущая дата + 14 дней, округленная до пятницы
-                        end_candidate = today + timedelta(days=14)
-                        days_until_friday = (4 - end_candidate.weekday()) % 7
-                        default_end = end_candidate + timedelta(days=days_until_friday)
-                        
-                        # Ограничить даты в пределах проекта
-                        if project_start and project_end:
-                            project_start_date = project_start.date()
-                            project_end_date = project_end.date()
-                            default_start = max(default_start, project_start_date)
-                            default_start = min(default_start, project_end_date)
-                            default_end = max(default_end, project_start_date)
-                            default_end = min(default_end, project_end_date)
-                        
-                        st.session_state.date_range_start = default_start
-                        st.session_state.date_range_end = default_end
-                        # Рассчитать данные с учетом выбранного диапазона
-                        st.session_state.workload_data = parser.get_resource_workload_data(
-                            st.session_state.date_range_start,
-                            st.session_state.date_range_end
-                        )
-                        st.session_state.analysis = analyze_workload(st.session_state.workload_data)
-                        st.success("✓ Файл успешно проанализирован!")
-                        st.rerun()
+                    if not files_to_process:
+                        st.error("Нет файлов для анализа")
                     else:
-                        st.error("Не удалось проанализировать файл")
+                        # Создать парсер для каждого файла
+                        parsers = []
+                        all_resources = []
+                        failed_files = []
+                        
+                        for file_info in files_to_process:
+                            try:
+                                parser = MSProjectParser(file_info['content'])
+                                if parser.parse():
+                                    parsers.append(parser)
+                                    all_resources.extend(parser.resources)
+                                else:
+                                    failed_files.append(file_info['name'])
+                            except Exception as e:
+                                failed_files.append(f"{file_info['name']}: {str(e)}")
+                        
+                        if failed_files:
+                            st.warning(f"⚠️ Не удалось проанализировать {len(failed_files)} файл(ов): {', '.join(failed_files)}")
+                        
+                        if parsers:
+                            # Обнаружение конфликтов между сотрудниками из всех XML и сохраненными
+                            conflicts = detect_conflicts(st.session_state.saved_resources, all_resources)
+                            
+                            if conflicts:
+                                # Сохранить конфликты для отображения в UI
+                                st.session_state.pending_conflicts = conflicts
+                                # Создать временный MultiProjectParser для хранения данных
+                                multi_parser = MultiProjectParser(parsers)
+                                st.session_state.parser = multi_parser
+                                st.warning(f"⚠️ Обнаружено {len(conflicts)} конфликт(ов) при объединении сотрудников. Разрешите их ниже.")
+                            else:
+                                # Нет конфликтов - объединяем автоматически
+                                merged_resources = merge_resources(
+                                    st.session_state.saved_resources,
+                                    all_resources,
+                                    st.session_state.conflict_resolutions
+                                )
+                                st.session_state.saved_resources = merged_resources
+                                
+                                # Обновить ресурсы во всех парсерах
+                                for parser in parsers:
+                                    parser.resources = merged_resources
+                                
+                                # Сохранить в файл
+                                save_employees_data(
+                                    st.session_state.saved_resources,
+                                    st.session_state.resource_groups
+                                )
+                                
+                                # Создать MultiProjectParser из всех парсеров
+                                multi_parser = MultiProjectParser(parsers)
+                                st.session_state.parser = multi_parser
+                                
+                                # Инициализировать даты проекта на основе текущей даты
+                                today = datetime.now().date()
+                                
+                                # Получить даты проекта для ограничения
+                                project_start, project_end = multi_parser.get_project_dates()
+                                
+                                # Начало: текущая дата - 7 дней, округленная до понедельника
+                                start_candidate = today - timedelta(days=7)
+                                days_since_monday = start_candidate.weekday()
+                                default_start = start_candidate - timedelta(days=days_since_monday)
+                                
+                                # Конец: текущая дата + 14 дней, округленная до пятницы
+                                end_candidate = today + timedelta(days=14)
+                                days_until_friday = (4 - end_candidate.weekday()) % 7
+                                default_end = end_candidate + timedelta(days=days_until_friday)
+                                
+                                # Ограничить даты в пределах проекта
+                                if project_start and project_end:
+                                    project_start_date = project_start.date()
+                                    project_end_date = project_end.date()
+                                    default_start = max(default_start, project_start_date)
+                                    default_start = min(default_start, project_end_date)
+                                    default_end = max(default_end, project_start_date)
+                                    default_end = min(default_end, project_end_date)
+                                
+                                st.session_state.date_range_start = default_start
+                                st.session_state.date_range_end = default_end
+                                # Рассчитать данные с учетом выбранного диапазона
+                                st.session_state.workload_data = multi_parser.get_resource_workload_data(
+                                    st.session_state.date_range_start,
+                                    st.session_state.date_range_end
+                                )
+                                st.session_state.analysis = analyze_workload(st.session_state.workload_data)
+                                
+                                if file_count == 1:
+                                    st.success("✓ Файл успешно проанализирован!")
+                                else:
+                                    st.success(f"✓ {len(parsers)} файл(ов) успешно проанализировано!")
+                                st.rerun()
+                        else:
+                            st.error("Не удалось проанализировать ни один файл")
+        
+        # UI для разрешения конфликтов при парсинге XML
+        if st.session_state.pending_conflicts:
+            st.markdown("---")
+            st.markdown("### ⚠️ Разрешение конфликтов сотрудников")
+            st.info("Обнаружены конфликты при объединении сотрудников из XML с сохраненными. Выберите действие для каждого конфликта.")
+            
+            with st.expander("📋 Список конфликтов", expanded=True):
+                for idx, conflict in enumerate(st.session_state.pending_conflicts):
+                    existing = conflict['existing']
+                    new = conflict['new']
+                    conflict_type = conflict['type']
+                    conflict_key = f"{new.get('id', '')}_{new.get('name', '')}"
+                    
+                    st.markdown(f"**Конфликт #{idx + 1}** ({'по ID' if conflict_type == 'id' else 'по имени'})")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**В файле:**")
+                        st.text(f"ID: {existing.get('id', 'N/A')}")
+                        st.text(f"Имя: {existing.get('name', 'N/A')}")
+                        st.text(f"Max Units: {existing.get('max_units', 'N/A')}")
+                    
+                    with col2:
+                        st.markdown("**Из XML:**")
+                        st.text(f"ID: {new.get('id', 'N/A')}")
+                        st.text(f"Имя: {new.get('name', 'N/A')}")
+                        st.text(f"Max Units: {new.get('max_units', 'N/A')}")
+                    
+                    # Радио-кнопки выбора действия
+                    resolution = st.radio(
+                        "Действие:",
+                        options=['skip', 'update', 'add_new'],
+                        format_func=lambda x: {
+                            'skip': 'Пропустить (оставить из файла)',
+                            'update': 'Обновить из XML',
+                            'add_new': 'Добавить как нового сотрудника'
+                        }[x],
+                        key=f"conflict_resolution_{idx}",
+                        index=0
+                    )
+                    
+                    st.session_state.conflict_resolutions[conflict_key] = resolution
+                    st.markdown("---")
+                
+                if st.button("✅ Применить решения", key="apply_conflict_resolutions", use_container_width=True):
+                    # Объединить ресурсы с учетом решений
+                    merged_resources = merge_resources(
+                        st.session_state.saved_resources,
+                        st.session_state.parser.resources,
+                        st.session_state.conflict_resolutions
+                    )
+                    st.session_state.saved_resources = merged_resources
+                    
+                    # Обновить ресурсы во всех парсерах (сеттер сам обновит все парсеры и кэш)
+                    st.session_state.parser.resources = merged_resources
+                    
+                    # Сохранить в файл
+                    save_employees_data(
+                        st.session_state.saved_resources,
+                        st.session_state.resource_groups
+                    )
+                    
+                    # Очистить конфликты
+                    st.session_state.pending_conflicts = []
+                    st.session_state.conflict_resolutions = {}
+                    
+                    # Продолжить инициализацию дат и расчетов
+                    today = datetime.now().date()
+                    project_start, project_end = st.session_state.parser.get_project_dates()
+                    
+                    start_candidate = today - timedelta(days=7)
+                    days_since_monday = start_candidate.weekday()
+                    default_start = start_candidate - timedelta(days=days_since_monday)
+                    
+                    end_candidate = today + timedelta(days=14)
+                    days_until_friday = (4 - end_candidate.weekday()) % 7
+                    default_end = end_candidate + timedelta(days=days_until_friday)
+                    
+                    if project_start and project_end:
+                        project_start_date = project_start.date()
+                        project_end_date = project_end.date()
+                        default_start = max(default_start, project_start_date)
+                        default_start = min(default_start, project_end_date)
+                        default_end = max(default_end, project_start_date)
+                        default_end = min(default_end, project_end_date)
+                    
+                    st.session_state.date_range_start = default_start
+                    st.session_state.date_range_end = default_end
+                    st.session_state.workload_data = st.session_state.parser.get_resource_workload_data(
+                        st.session_state.date_range_start,
+                        st.session_state.date_range_end
+                    )
+                    st.session_state.analysis = analyze_workload(st.session_state.workload_data)
+                    st.success("✓ Конфликты разрешены, файл успешно проанализирован!")
+                    st.rerun()
         
         # Фильтр временного диапазона
         if st.session_state.parser is not None:
@@ -1809,8 +2441,8 @@ def main():
         selected_resources = []
         display_data = workload_data
         
-        # Два таба: Текущий выбор и Сохраненные группы
-        tab1, tab2 = st.tabs(["🔍 Текущий выбор", "💾 Сохраненные группы"])
+        # Три таба: Текущий выбор, Сохраненные группы и Управление сотрудниками
+        tab1, tab2, tab3 = st.tabs(["🔍 Текущий выбор", "💾 Сохраненные группы", "👤 Управление сотрудниками"])
         
         # ========== ТАБ 1: ТЕКУЩИЙ ВЫБОР ==========
         with tab1:
@@ -1872,6 +2504,11 @@ def main():
                                 st.error("Группа с таким названием уже существует")
                             else:
                                 st.session_state.resource_groups[quick_group_name] = selected_resources.copy()
+                                # Сохранить в файл
+                                save_employees_data(
+                                    st.session_state.saved_resources,
+                                    st.session_state.resource_groups
+                                )
                                 st.success(f"✓ Группа '{quick_group_name}' создана ({len(selected_resources)} чел.)")
                                 st.rerun()
                 
@@ -1928,6 +2565,11 @@ def main():
                         st.error("Группа с таким названием уже существует")
                     else:
                         st.session_state.resource_groups[new_group_name] = new_group_resources
+                        # Сохранить в файл
+                        save_employees_data(
+                            st.session_state.saved_resources,
+                            st.session_state.resource_groups
+                        )
                         st.success(f"✓ Группа '{new_group_name}' создана ({len(new_group_resources)} чел.)")
                         st.rerun()
             
@@ -1947,6 +2589,11 @@ def main():
                             del st.session_state.resource_groups[group_name]
                             if st.session_state.applied_group and st.session_state.applied_group[0] == group_name:
                                 st.session_state.applied_group = None
+                            # Сохранить в файл
+                            save_employees_data(
+                                st.session_state.saved_resources,
+                                st.session_state.resource_groups
+                            )
                             st.success(f"✓ Группа '{group_name}' удалена")
                             st.rerun()
                     
@@ -1960,6 +2607,145 @@ def main():
                             st.caption("Группа пуста")
                     
                     st.markdown("")  # Добавить отступ между группами
+        
+        # ========== ТАБ 3: УПРАВЛЕНИЕ СОТРУДНИКАМИ ==========
+        with tab3:
+            st.markdown("**Управление перечнем сотрудников:**")
+            
+            # Отображение списка сотрудников
+            if st.session_state.saved_resources:
+                st.markdown(f"**Всего сотрудников: {len(st.session_state.saved_resources)}**")
+                
+                # Таблица сотрудников
+                employees_df = pd.DataFrame(st.session_state.saved_resources)
+                st.dataframe(
+                    employees_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Удаление сотрудника
+                st.markdown("---")
+                st.markdown("**Удалить сотрудника:**")
+                employee_names = [r.get('name', '') for r in st.session_state.saved_resources]
+                if employee_names:
+                    selected_employee_to_delete = st.selectbox(
+                        "Выберите сотрудника для удаления:",
+                        options=employee_names,
+                        key="delete_employee_select"
+                    )
+                    if st.button("🗑️ Удалить сотрудника", key="delete_employee_btn"):
+                        st.session_state.saved_resources = [
+                            r for r in st.session_state.saved_resources 
+                            if r.get('name') != selected_employee_to_delete
+                        ]
+                        # Обновить группы - удалить сотрудника из всех групп
+                        for group_name in st.session_state.resource_groups:
+                            st.session_state.resource_groups[group_name] = [
+                                name for name in st.session_state.resource_groups[group_name]
+                                if name != selected_employee_to_delete
+                            ]
+                        # Сохранить в файл
+                        save_employees_data(
+                            st.session_state.saved_resources,
+                            st.session_state.resource_groups
+                        )
+                        st.success(f"✓ Сотрудник '{selected_employee_to_delete}' удален")
+                        st.rerun()
+            else:
+                st.info("Список сотрудников пуст. Добавьте сотрудников через форму ниже или загрузите XML-файл проекта.")
+            
+            # Добавление нового сотрудника
+            st.markdown("---")
+            st.markdown("**Добавить нового сотрудника:**")
+            with st.expander("➕ Добавить сотрудника", expanded=not st.session_state.saved_resources):
+                new_employee_id = st.text_input("ID сотрудника:", key="new_employee_id")
+                new_employee_name = st.text_input("Имя сотрудника:", key="new_employee_name")
+                new_employee_max_units = st.text_input("Max Units:", value="1.0", key="new_employee_max_units")
+                
+                if st.button("💾 Добавить сотрудника", key="add_employee_btn"):
+                    if not new_employee_id:
+                        st.error("Введите ID сотрудника")
+                    elif not new_employee_name:
+                        st.error("Введите имя сотрудника")
+                    else:
+                        # Проверить на дубликаты
+                        existing_ids = [r.get('id') for r in st.session_state.saved_resources]
+                        existing_names = [r.get('name') for r in st.session_state.saved_resources]
+                        
+                        if new_employee_id in existing_ids:
+                            st.error(f"Сотрудник с ID '{new_employee_id}' уже существует")
+                        elif new_employee_name in existing_names:
+                            st.error(f"Сотрудник с именем '{new_employee_name}' уже существует")
+                        else:
+                            new_employee = {
+                                'id': new_employee_id,
+                                'name': new_employee_name,
+                                'max_units': new_employee_max_units or '1.0'
+                            }
+                            st.session_state.saved_resources.append(new_employee)
+                            # Сохранить в файл
+                            save_employees_data(
+                                st.session_state.saved_resources,
+                                st.session_state.resource_groups
+                            )
+                            st.success(f"✓ Сотрудник '{new_employee_name}' добавлен")
+                            st.rerun()
+            
+            # Редактирование сотрудника
+            if st.session_state.saved_resources:
+                st.markdown("---")
+                st.markdown("**Редактировать сотрудника:**")
+                employee_names_edit = [r.get('name', '') for r in st.session_state.saved_resources]
+                selected_employee_to_edit = st.selectbox(
+                    "Выберите сотрудника для редактирования:",
+                    options=employee_names_edit,
+                    key="edit_employee_select"
+                )
+                
+                if selected_employee_to_edit:
+                    employee_to_edit = next(
+                        (r for r in st.session_state.saved_resources if r.get('name') == selected_employee_to_edit),
+                        None
+                    )
+                    if employee_to_edit:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            edited_id = st.text_input("ID:", value=employee_to_edit.get('id', ''), key="edit_employee_id")
+                        with col2:
+                            edited_name = st.text_input("Имя:", value=employee_to_edit.get('name', ''), key="edit_employee_name")
+                        with col3:
+                            edited_max_units = st.text_input("Max Units:", value=employee_to_edit.get('max_units', '1.0'), key="edit_employee_max_units")
+                        
+                        if st.button("💾 Сохранить изменения", key="save_employee_edit_btn"):
+                            # Проверить на дубликаты (кроме текущего)
+                            existing_ids = [r.get('id') for r in st.session_state.saved_resources if r.get('name') != selected_employee_to_edit]
+                            existing_names = [r.get('name') for r in st.session_state.saved_resources if r.get('name') != selected_employee_to_edit]
+                            
+                            if edited_id in existing_ids:
+                                st.error(f"Сотрудник с ID '{edited_id}' уже существует")
+                            elif edited_name in existing_names:
+                                st.error(f"Сотрудник с именем '{edited_name}' уже существует")
+                            else:
+                                # Обновить данные сотрудника
+                                employee_to_edit['id'] = edited_id
+                                employee_to_edit['name'] = edited_name
+                                employee_to_edit['max_units'] = edited_max_units
+                                
+                                # Обновить имя в группах, если оно изменилось
+                                if edited_name != selected_employee_to_edit:
+                                    for group_name in st.session_state.resource_groups:
+                                        if selected_employee_to_edit in st.session_state.resource_groups[group_name]:
+                                            index = st.session_state.resource_groups[group_name].index(selected_employee_to_edit)
+                                            st.session_state.resource_groups[group_name][index] = edited_name
+                                
+                                # Сохранить в файл
+                                save_employees_data(
+                                    st.session_state.saved_resources,
+                                    st.session_state.resource_groups
+                                )
+                                st.success(f"✓ Сотрудник '{edited_name}' обновлен")
+                                st.rerun()
         
         st.markdown("---")
         

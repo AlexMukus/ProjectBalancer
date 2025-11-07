@@ -67,7 +67,8 @@ datas += copy_metadata('Pillow')
 # Добавить файлы проекта
 datas += [('app.py', '.')]
 datas += [('md3_components.py', '.')]
-datas += [('.streamlit/config.toml', '.streamlit')]
+# config.toml убран из сборки - используем только параметры командной строки в run_app.py
+# Это решает проблемы с парсингом TOML в некоторых версиях Streamlit
 
 block_cipher = None
 

@@ -1,12 +1,21 @@
-﻿[browser]
-gatherUsageStats = false
-
 [server]
+# port = 8501  # Порт задается через параметр командной строки для автоматического выбора свободного порта
 headless = true
-port = 8501
-address = "localhost"
-enableCORS = false
-enableXsrfProtection = false
+runOnSave = false
+maxUploadSize = 200
+maxMessageSize = 200
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[theme]
+primaryColor = "#0078D4"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
 
 [global]
 developmentMode = false
+
