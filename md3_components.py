@@ -343,16 +343,19 @@ def md3_metric_card(icon, value, label, description=""):
         label: Название метрики
         description: Дополнительное описание (опционально)
     """
+    # Валидация и преобразование параметров в строки
+    icon = str(icon) if icon is not None else ""
+    value = str(value) if value is not None else ""
+    label = str(label) if label is not None else ""
+    description = str(description) if description is not None else ""
+    
+    # Генерация HTML для описания
     desc_html = f'<div class="md3-body-small" style="color: var(--md-sys-color-on-surface-variant); margin-top: 4px;">{description}</div>' if description else ''
     
-    return f"""
-    <div class="md3-card" style="text-align: center;">
-        <div style="font-size: 32px; margin-bottom: 8px;">{icon}</div>
-        <div class="md3-display-small" style="color: var(--md-sys-color-on-surface); margin-bottom: 4px;">{value}</div>
-        <div class="md3-label-medium" style="color: var(--md-sys-color-on-surface-variant);">{label}</div>
-        {desc_html}
-    </div>
-    """
+    # Генерация HTML для метрики (без лишних переносов строк)
+    html = f'<div class="md3-card" style="text-align: center;"><div style="font-size: 32px; margin-bottom: 8px;">{icon}</div><div class="md3-display-small" style="color: var(--md-sys-color-on-surface); margin-bottom: 4px;">{value}</div><div class="md3-label-medium" style="color: var(--md-sys-color-on-surface-variant);">{label}</div>{desc_html}</div>'
+    
+    return html
 
 
 def md3_info_panel(period_text, business_days, capacity_hours):
@@ -364,15 +367,25 @@ def md3_info_panel(period_text, business_days, capacity_hours):
         business_days: Количество рабочих дней
         capacity_hours: Рабочая ёмкость в часах
     """
-    return f"""
-    <div style="margin: 24px 0;">
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
-            {md3_metric_card("📅", period_text, "Период анализа")}
-            {md3_metric_card("📊", f"{business_days} дн.", "Рабочие дни", "Пн-Пт")}
-            {md3_metric_card("⏱️", f"{capacity_hours} ч", "Ёмкость на чел.", f"{business_days} × 8 часов")}
-        </div>
-    </div>
-    """
+    # Валидация параметров
+    period_text = str(period_text) if period_text is not None else ""
+    business_days = int(business_days) if business_days is not None else 0
+    capacity_hours = float(capacity_hours) if capacity_hours is not None else 0.0
+    
+    # Форматирование значений для отображения
+    business_days_str = f"{business_days} дн."
+    capacity_hours_str = f"{int(capacity_hours)} ч" if capacity_hours == int(capacity_hours) else f"{capacity_hours:.1f} ч"
+    description_str = f"{business_days} × 8 часов"
+    
+    # Генерируем карточки метрик
+    card1 = md3_metric_card("📅", period_text, "Период анализа")
+    card2 = md3_metric_card("📊", business_days_str, "Рабочие дни", "Пн-Пт")
+    card3 = md3_metric_card("⏱️", capacity_hours_str, "Ёмкость на чел.", description_str)
+    
+    # Собираем HTML без лишних переносов строк
+    html = f'<div style="margin: 24px 0;"><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">{card1}{card2}{card3}</div></div>'
+    
+    return html
 
 
 def md3_chip(text, closeable=False, chip_id=""):

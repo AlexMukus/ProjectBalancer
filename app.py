@@ -107,89 +107,49 @@ def save_employees_data(resources, resource_groups):
         return False
 
 def detect_conflicts(existing_resources, new_resources):
-    """Обнаружение конфликтов между существующими и новыми сотрудниками"""
-    conflicts = []
-    
-    for new_resource in new_resources:
-        new_id = new_resource.get('id', '')
-        new_name = new_resource.get('name', '')
-        
-        # Проверка по ID
-        existing_by_id = next((r for r in existing_resources if r.get('id') == new_id), None)
-        if existing_by_id:
-            conflicts.append({
-                'type': 'id',
-                'existing': existing_by_id,
-                'new': new_resource,
-                'key': new_id
-            })
-            continue
-        
-        # Проверка по имени (если ID разные)
-        existing_by_name = next((r for r in existing_resources if r.get('name') == new_name), None)
-        if existing_by_name:
-            conflicts.append({
-                'type': 'name',
-                'existing': existing_by_name,
-                'new': new_resource,
-                'key': new_name
-            })
-    
-    return conflicts
+    """Обнаружение конфликтов между существующими и новыми сотрудниками (только по имени)"""
+    # Конфликты по имени обрабатываются автоматически в merge_resources (пропускаются)
+    # Эта функция возвращает пустой список, так как все конфликты по имени разрешаются автоматически
+    return []
 
 def merge_resources(existing_resources, new_resources, conflict_resolutions=None):
-    """Объединение списков сотрудников с учетом решений по конфликтам"""
+    """Объединение списков сотрудников с учетом решений по конфликтам (только по имени)"""
     if conflict_resolutions is None:
         conflict_resolutions = {}
     
     # Копируем существующих сотрудников
     merged = existing_resources.copy()
     
-    # Словарь для быстрого поиска по ID и имени
-    existing_by_id = {r.get('id'): r for r in existing_resources}
+    # Словарь для быстрого поиска по имени
     existing_by_name = {r.get('name'): r for r in existing_resources}
     
     for new_resource in new_resources:
-        new_id = new_resource.get('id', '')
         new_name = new_resource.get('name', '')
         
-        # Проверяем, есть ли конфликт
-        has_id_conflict = new_id in existing_by_id
+        # Проверяем, есть ли конфликт по имени
         has_name_conflict = new_name in existing_by_name
         
         # Проверяем, есть ли решение для этого конфликта
-        conflict_key = f"{new_id}_{new_name}"
+        conflict_key = new_name
         resolution = conflict_resolutions.get(conflict_key)
         
         if resolution == 'skip':
-            # Пропустить - не добавлять
+            # Пропустить - не добавлять (оставить из файла)
             continue
         elif resolution == 'update':
-            # Обновить существующего
-            if has_id_conflict:
-                # Обновляем по ID
-                index = merged.index(existing_by_id[new_id])
-                merged[index] = new_resource.copy()
-            elif has_name_conflict:
-                # Обновляем по имени
+            # Обновить существующего по имени
+            if has_name_conflict:
                 index = merged.index(existing_by_name[new_name])
                 merged[index] = new_resource.copy()
         elif resolution == 'add_new':
-            # Добавить как нового (с другим ID если нужно)
-            if has_id_conflict:
-                # Генерируем новый ID
-                max_id = max([int(r.get('id', '0')) for r in merged if r.get('id', '').isdigit()], default=0)
-                new_resource_copy = new_resource.copy()
-                new_resource_copy['id'] = str(max_id + 1)
-                merged.append(new_resource_copy)
-            else:
-                merged.append(new_resource.copy())
+            # Добавить как нового сотрудника
+            merged.append(new_resource.copy())
         else:
-            # По умолчанию: если есть конфликт (по ID или имени), оставляем данные из файла (пропускаем)
-            # Если нет конфликта, добавляем новый ресурс
-            if not has_id_conflict and not has_name_conflict:
+            # По умолчанию: если имя совпадает, пропускаем (оставляем из файла)
+            # Если имя не совпадает, добавляем новый ресурс
+            if not has_name_conflict:
                 merged.append(new_resource.copy())
-            # Если есть конфликт и нет явного решения - пропускаем (оставляем из файла)
+            # Если имя совпадает и нет явного решения - пропускаем (оставляем из файла)
     
     return merged
 
@@ -1998,8 +1958,6 @@ if 'date_range_start' not in st.session_state:
     st.session_state.date_range_start = None
 if 'date_range_end' not in st.session_state:
     st.session_state.date_range_end = None
-if 'uploaded_files' not in st.session_state:
-    st.session_state.uploaded_files = []  # Список загруженных файлов
 if 'resource_groups' not in st.session_state or 'saved_resources' not in st.session_state:
     # Загрузить данные из файла при первом запуске
     employees_data = load_employees_data()
@@ -2059,26 +2017,12 @@ def main():
             help="Загрузите один или несколько XML-файлов Microsoft Project для анализа"
         )
         
-        # Сохранить содержимое файлов как байты для надежности при st.rerun()
-        if uploaded_files is not None and len(uploaded_files) > 0:
-            st.session_state.uploaded_files = [
-                {'name': f.name, 'content': f.getvalue()}
-                for f in uploaded_files
-            ]
-        elif uploaded_files is not None and len(uploaded_files) == 0:
-            # Пользователь очистил загрузку
-            st.session_state.uploaded_files = []
-        
         # Проверить наличие загруженных файлов
-        has_files = (uploaded_files is not None and len(uploaded_files) > 0) or (len(st.session_state.uploaded_files) > 0)
+        has_files = uploaded_files is not None and len(uploaded_files) > 0
         
         if has_files:
-            if uploaded_files is not None and len(uploaded_files) > 0:
-                file_count = len(uploaded_files)
-                file_names = [f.name for f in uploaded_files]
-            else:
-                file_count = len(st.session_state.uploaded_files)
-                file_names = [f['name'] for f in st.session_state.uploaded_files]
+            file_count = len(uploaded_files)
+            file_names = [f.name for f in uploaded_files]
             
             if file_count == 1:
                 st.success(f"✓ {file_names[0]} загружен")
@@ -2091,14 +2035,8 @@ def main():
             button_text = "🔄 Анализировать файл" if file_count == 1 else f"🔄 Анализировать {file_count} файлов"
             if st.button(button_text, use_container_width=True):
                 with st.spinner(f"Анализ {file_count} файл(ов) MS Project..."):
-                    # Получить список файлов для обработки
-                    files_to_process = []
-                    if uploaded_files is not None and len(uploaded_files) > 0:
-                        files_to_process = [{'name': f.name, 'content': f.getvalue()} for f in uploaded_files]
-                    else:
-                        files_to_process = st.session_state.uploaded_files
-                    
-                    if not files_to_process:
+                    # Использовать uploaded_files напрямую из st.file_uploader
+                    if not uploaded_files or len(uploaded_files) == 0:
                         st.error("Нет файлов для анализа")
                     else:
                         # Создать парсер для каждого файла
@@ -2106,16 +2044,17 @@ def main():
                         all_resources = []
                         failed_files = []
                         
-                        for file_info in files_to_process:
+                        for uploaded_file in uploaded_files:
                             try:
-                                parser = MSProjectParser(file_info['content'])
+                                file_content = uploaded_file.getvalue()
+                                parser = MSProjectParser(file_content)
                                 if parser.parse():
                                     parsers.append(parser)
                                     all_resources.extend(parser.resources)
                                 else:
-                                    failed_files.append(file_info['name'])
+                                    failed_files.append(uploaded_file.name)
                             except Exception as e:
-                                failed_files.append(f"{file_info['name']}: {str(e)}")
+                                failed_files.append(f"{uploaded_file.name}: {str(e)}")
                         
                         if failed_files:
                             st.warning(f"⚠️ Не удалось проанализировать {len(failed_files)} файл(ов): {', '.join(failed_files)}")
@@ -2207,9 +2146,10 @@ def main():
                     existing = conflict['existing']
                     new = conflict['new']
                     conflict_type = conflict['type']
-                    conflict_key = f"{new.get('id', '')}_{new.get('name', '')}"
+                    # Используем только имя как ключ конфликта
+                    conflict_key = new.get('name', '')
                     
-                    st.markdown(f"**Конфликт #{idx + 1}** ({'по ID' if conflict_type == 'id' else 'по имени'})")
+                    st.markdown(f"**Конфликт #{idx + 1}** (по имени)")
                     
                     col1, col2 = st.columns(2)
                     with col1:
@@ -2424,9 +2364,11 @@ def main():
             business_days = calculate_business_days(st.session_state.date_range_start, st.session_state.date_range_end)
             work_capacity = calculate_work_capacity(business_days)
             
-            # Material Design 3 панель управления периодом
-            period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
-            st.markdown(md3_info_panel(period_str, business_days, work_capacity), unsafe_allow_html=True)
+            # Проверка корректности значений перед отображением
+            if business_days is not None and business_days >= 0 and work_capacity is not None and work_capacity >= 0:
+                # Material Design 3 панель управления периодом
+                period_str = f"{st.session_state.date_range_start.strftime('%d.%m.%Y')} - {st.session_state.date_range_end.strftime('%d.%m.%Y')}"
+                st.markdown(md3_info_panel(period_str, business_days, work_capacity), unsafe_allow_html=True)
         
         st.markdown("---")
         
