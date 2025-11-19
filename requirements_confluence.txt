@@ -1,0 +1,4 @@
+# Дополнительные зависимости для интеграции с Confluence
+requests>=2.31.0
+atlassian-python-api>=3.41.0
+beautifulsoup4>=4.12.0
