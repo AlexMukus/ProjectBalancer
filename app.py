@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import io
 import json
 import os
+import logging
 from lxml import etree
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, A4
@@ -16,6 +17,23 @@ from reportlab.pdfbase.ttfonts import TTFont
 
 # Импорт MD3 компонентов
 from md3_components import get_md3_css, md3_info_panel, get_md3_table_style, get_md3_chart_colors
+
+# Импорт функции для построения диаграммы Ганта
+from gantt_chart import create_gantt_chart
+
+# Импорт функции для парсинга ресурсов
+from resource_parser import parse_resources
+
+# Импорт функции для парсинга назначений
+from assignment_parser import parse_assignments
+
+# Импорт утилит для работы с MS Project
+from msproject_utils import (
+    get_namespace, make_tag, find_elements, get_text,
+    parse_date, parse_work_hours,
+    calculate_available_work_hours, calculate_business_days, calculate_work_capacity,
+    find_task_by_name_and_dates
+)
 
 # Функция для определения базового пути (для frozen и обычного режима)
 def get_base_path():
@@ -149,7 +167,6 @@ def merge_resources(existing_resources, new_resources, conflict_resolutions=None
             # Если имя не совпадает, добавляем новый ресурс
             if not has_name_conflict:
                 merged.append(new_resource.copy())
-            # Если имя совпадает и нет явного решения - пропускаем (оставляем из файла)
     
     return merged
 
@@ -162,6 +179,7 @@ class MSProjectParser:
         self.tasks = []
         self.resources = []
         self.assignments = []
+        self.project_name = None
     
     @staticmethod
     def clean_xml_content(xml_bytes):
@@ -198,6 +216,10 @@ class MSProjectParser:
     def parse(self):
         """Парсинг XML-файла MS Project"""
         try:
+            # Очищаем логи перед парсингом
+            if 'parsing_logs' in st.session_state:
+                st.session_state.parsing_logs.clear()
+            
             # Очищаем XML от недопустимых символов
             cleaned_content = self.clean_xml_content(self.file_content)
             
@@ -205,97 +227,83 @@ class MSProjectParser:
             root = tree.getroot()
             
             # Получение namespace
-            namespace = {'ns': root.nsmap[None]} if None in root.nsmap else {}
+            namespace = get_namespace(root)
+            
+            # Парсинг названия проекта
+            self.project_name = get_text(root, make_tag('Name', namespace), namespace, default='Неизвестный проект')
             
             # Парсинг ресурсов
-            self.resources = self._parse_resources(root, namespace)
+            st.info("🔍 Начинаю парсинг ресурсов...")
+            # Добавляем тестовое логирование
+            resource_logger.info("=== НАЧАЛО ПАРСИНГА РЕСУРСОВ ===")
+            self.resources = parse_resources(root, namespace, filter_inactive=True)
+            resource_logger.info(f"=== ПАРСИНГ РЕСУРСОВ ЗАВЕРШЕН: найдено {len(self.resources)} ресурсов ===")
+            st.success(f"✓ Найдено ресурсов: {len(self.resources)}")
             
             # Парсинг задач
+            st.info("🔍 Начинаю парсинг задач...")
             self.tasks = self._parse_tasks(root, namespace)
+            st.success(f"✓ Найдено задач: {len(self.tasks)}")
             
             # Парсинг назначений
-            self.assignments = self._parse_assignments(root, namespace)
+            st.info("🔍 Начинаю парсинг назначений...")
+            # Добавляем тестовое логирование
+            assignment_logger.info("=== НАЧАЛО ПАРСИНГА НАЗНАЧЕНИЙ ===")
+            self.assignments = parse_assignments(root, namespace, self.resources, self.tasks)
+            assignment_logger.info(f"=== ПАРСИНГ НАЗНАЧЕНИЙ ЗАВЕРШЕН: найдено {len(self.assignments)} назначений ===")
+            st.success(f"✓ Найдено назначений: {len(self.assignments)}")
+            
+            # Проверяем, что логи собраны
+            if 'parsing_logs' in st.session_state:
+                st.info(f"📝 Собрано логов: {len(st.session_state.parsing_logs)} записей")
             
             return True
         except Exception as e:
             st.error(f"Ошибка при парсинге файла MS Project: {str(e)}")
             return False
     
-    def _parse_resources(self, root, namespace):
-        """Парсинг информации о ресурсах"""
-        resources = []
-        resource_elements = root.findall('.//ns:Resource', namespace) if namespace else root.findall('.//Resource')
-        
-        for resource in resource_elements:
-            resource_id = self._get_text(resource, 'ns:UID' if namespace else 'UID', namespace)
-            name = self._get_text(resource, 'ns:Name' if namespace else 'Name', namespace)
-            
-            if resource_id and name:
-                resources.append({
-                    'id': resource_id,
-                    'name': name,
-                    'max_units': self._get_text(resource, 'ns:MaxUnits' if namespace else 'MaxUnits', namespace, default='1.0')
-                })
-        
-        return resources
+    # Метод _parse_resources перенесен в модуль resource_parser
+    # Используется функция parse_resources из resource_parser.py
     
     def _parse_tasks(self, root, namespace):
         """Parse task information including dependencies"""
         tasks = []
-        task_elements = root.findall('.//ns:Task', namespace) if namespace else root.findall('.//Task')
+        task_elements = find_elements(root, 'Task', namespace)
         
         for task in task_elements:
-            task_id = self._get_text(task, 'ns:UID' if namespace else 'UID', namespace)
-            name = self._get_text(task, 'ns:Name' if namespace else 'Name', namespace)
+            task_id = get_text(task, make_tag('UID', namespace), namespace)
+            name = get_text(task, make_tag('Name', namespace), namespace)
             
-            if task_id and name:
-                # Парсинг зависимостей задач (PredecessorLink)
-                predecessors = []
-                pred_links = task.findall('.//ns:PredecessorLink', namespace) if namespace else task.findall('.//PredecessorLink')
-                for pred in pred_links:
-                    pred_uid = self._get_text(pred, 'ns:PredecessorUID' if namespace else 'PredecessorUID', namespace)
-                    if pred_uid:
-                        predecessors.append(pred_uid)
-                
-                tasks.append({
-                    'id': task_id,
-                    'name': name,
-                    'start': self._get_text(task, 'ns:Start' if namespace else 'Start', namespace),
-                    'finish': self._get_text(task, 'ns:Finish' if namespace else 'Finish', namespace),
-                    'duration': self._get_text(task, 'ns:Duration' if namespace else 'Duration', namespace),
-                    'work': self._get_text(task, 'ns:Work' if namespace else 'Work', namespace),
-                    'predecessors': predecessors  # Список ID предшествующих задач
-                })
+            # Если имя пустое, сгенерировать автоматически
+            if not name and task_id:
+                name = f"Задача #{task_id}"
+            
+            # Если нет task_id, пропустить задачу (не можем сгенерировать имя)
+            if not task_id:
+                continue
+            
+            # Парсинг зависимостей задач (PredecessorLink)
+            predecessors = []
+            pred_links = find_elements(task, 'PredecessorLink', namespace)
+            for pred in pred_links:
+                pred_uid = get_text(pred, make_tag('PredecessorUID', namespace), namespace)
+                if pred_uid:
+                    predecessors.append(pred_uid)
+            
+            tasks.append({
+                'id': str(task_id),  # Сохраняем для отладки и зависимостей
+                'name': name,
+                'start': get_text(task, make_tag('Start', namespace), namespace),
+                'finish': get_text(task, make_tag('Finish', namespace), namespace),
+                'duration': get_text(task, make_tag('Duration', namespace), namespace),
+                'work': get_text(task, make_tag('Work', namespace), namespace),
+                'predecessors': [str(p) for p in predecessors]  # Преобразуем в строки для единообразия
+            })
         
         return tasks
     
-    def _parse_assignments(self, root, namespace):
-        """Parse resource assignments"""
-        assignments = []
-        assignment_elements = root.findall('.//ns:Assignment', namespace) if namespace else root.findall('.//Assignment')
-        
-        for assignment in assignment_elements:
-            task_uid = self._get_text(assignment, 'ns:TaskUID' if namespace else 'TaskUID', namespace)
-            resource_uid = self._get_text(assignment, 'ns:ResourceUID' if namespace else 'ResourceUID', namespace)
-            work = self._get_text(assignment, 'ns:Work' if namespace else 'Work', namespace)
-            
-            if task_uid and resource_uid:
-                assignments.append({
-                    'task_id': task_uid,
-                    'resource_id': resource_uid,
-                    'work': work,
-                    'units': self._get_text(assignment, 'ns:Units' if namespace else 'Units', namespace, default='1.0')
-                })
-        
-        return assignments
-    
-    def _get_text(self, element, tag, namespace, default=''):
-        """Helper to get text from XML element"""
-        try:
-            found = element.find(tag, namespace) if namespace else element.find(tag)
-            return found.text if found is not None and found.text else default
-        except:
-            return default
+    # Метод _parse_assignments перенесен в модуль assignment_parser
+    # Используется функция parse_assignments из assignment_parser.py
     
     def get_resource_workload_data(self, date_range_start=None, date_range_end=None):
         """
@@ -333,36 +341,32 @@ class MSProjectParser:
             range_end_dt = project_end
         
         # Calculate total available work hours for the selected range
-        # MS Project model: 1 workday (P1D) = 8 hours
-        # Default capacity for resources is 8 hours per workday
-        if range_start_dt and range_end_dt:
-            range_duration = range_end_dt - range_start_dt
-            calendar_days = range_duration.total_seconds() / (24 * 3600)
-            
-            if calendar_days <= 0:
-                # Minimum: 1 workday
-                available_work_hours_base = 8
-            else:
-                # Count workdays (approximate: 5/7 of calendar days are workdays)
-                workdays = calendar_days * (5.0 / 7.0)
-                # 8 hours per workday
-                available_work_hours_base = workdays * 8
-        else:
-            # Default: 4 weeks = 20 workdays = 160 hours
-            available_work_hours_base = 160
+        # Используем утилиту для расчета доступных рабочих часов
+        available_work_hours_base = calculate_available_work_hours(
+            date_range_start if date_range_start else project_start,
+            date_range_end if date_range_end else project_end,
+            default_hours=160
+        )
         
         for resource in self.resources:
-            # Get all assignments for this resource
-            resource_assignments = [a for a in self.assignments if a['resource_id'] == resource['id']]
+            # Get all assignments for this resource (по имени)
+            resource_name = resource.get('name', '')
+            resource_assignments = [a for a in self.assignments if a.get('resource_name') == resource_name]
             
             # Calculate total work hours (only within date range)
             total_work_hours = 0
             task_details = []
             
             for assignment in resource_assignments:
-                # Get task info
-                task = next((t for t in self.tasks if t['id'] == assignment['task_id']), None)
-                if task and task['start'] and task['finish']:
+                # Get task info по комбинации имени и дат
+                task = find_task_by_name_and_dates(
+                    self.tasks,
+                    assignment.get('task_name'),
+                    assignment.get('task_start'),
+                    assignment.get('task_finish')
+                )
+                
+                if task and task.get('start') and task.get('finish'):
                     task_start = self._parse_date(task['start'])
                     task_end = self._parse_date(task['finish'])
                     
@@ -379,6 +383,7 @@ class MSProjectParser:
                             total_work_hours += hours_in_range
                             
                             task_details.append({
+                                'task_id': task.get('id', 'N/A'),  # Только для отладки
                                 'task_name': task['name'],
                                 'work_hours': hours_in_range,
                                 'total_hours': total_task_hours,
@@ -391,6 +396,7 @@ class MSProjectParser:
                         work_hours = self._parse_work_hours(assignment['work'])
                         total_work_hours += work_hours
                         task_details.append({
+                            'task_id': task.get('id', 'N/A'),  # Только для отладки
                             'task_name': task['name'],
                             'work_hours': work_hours,
                             'start': task.get('start', 'N/A'),
@@ -419,76 +425,12 @@ class MSProjectParser:
         return workload_data
     
     def _parse_date(self, date_string):
-        """Parse date string to datetime object"""
-        if not date_string:
-            return None
-        
-        try:
-            # Try ISO format first
-            return datetime.fromisoformat(date_string.replace('Z', '+00:00'))
-        except:
-            try:
-                # Try common MS Project formats
-                for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
-                    try:
-                        return datetime.strptime(date_string, fmt)
-                    except:
-                        continue
-            except:
-                pass
-        
-        return None
+        """Parse date string to datetime object (использует утилиту)"""
+        return parse_date(date_string)
     
     def _parse_work_hours(self, work_string):
-        """Parse work hours from MS Project ISO-8601 duration format (e.g., PT8H0M0S, P2DT4H0M0S)"""
-        if not work_string:
-            return 0
-        
-        try:
-            # MS Project uses ISO-8601 duration format: P[n]DT[n]H[n]M[n]S
-            # P2DT4H30M0S = 2 days, 4 hours, 30 minutes
-            hours = 0
-            
-            if work_string.startswith('P'):
-                # Extract days (assuming 8-hour workdays)
-                if 'D' in work_string:
-                    d_start = 1  # After 'P'
-                    d_end = work_string.index('D')
-                    days = float(work_string[d_start:d_end])
-                    hours += days * 8  # 8-hour workday
-                
-                # Extract hours
-                if 'H' in work_string:
-                    # Find start position (after 'T' or 'D')
-                    if 'T' in work_string:
-                        h_start = work_string.index('T') + 1
-                    else:
-                        h_start = work_string.index('D') + 1
-                    h_end = work_string.index('H')
-                    # Extract the number between start and 'H'
-                    h_str = work_string[h_start:h_end]
-                    # Remove any non-digit characters except '.'
-                    h_str = ''.join(c for c in h_str if c.isdigit() or c == '.')
-                    if h_str:
-                        hours += float(h_str)
-                
-                # Extract minutes
-                if 'M' in work_string and 'T' in work_string:
-                    m_start = work_string.index('H') + 1 if 'H' in work_string else work_string.index('T') + 1
-                    m_end = work_string.index('M')
-                    m_str = work_string[m_start:m_end]
-                    m_str = ''.join(c for c in m_str if c.isdigit() or c == '.')
-                    if m_str:
-                        minutes = float(m_str)
-                        hours += minutes / 60
-                
-                return hours
-            else:
-                # Try to parse as number
-                return float(work_string)
-        except Exception as e:
-            # Fallback to 0 if parsing fails
-            return 0
+        """Parse work hours from MS Project ISO-8601 duration format (использует утилиту)"""
+        return parse_work_hours(work_string)
     
     def get_timeline_workload(self, date_range_start=None, date_range_end=None):
         """
@@ -527,9 +469,6 @@ class MSProjectParser:
         if not range_start_dt or not range_end_dt:
             return {}
         
-        # Кэшировать задачи для быстрого доступа
-        task_dict = {t['id']: t for t in self.tasks}
-        
         # Создать недельные периоды только для выбранного диапазона
         current_date = range_start_dt
         weeks = []
@@ -544,15 +483,22 @@ class MSProjectParser:
         
         # Для каждого ресурса рассчитать загрузку по неделям
         for resource in self.resources:
-            resource_assignments = [a for a in self.assignments if a['resource_id'] == resource['id']]
+            resource_name = resource.get('name', '')
+            resource_assignments = [a for a in self.assignments if a.get('resource_name') == resource_name]
             weekly_loads = []
             
             for week in weeks:
                 week_hours = 0
                 
                 for assignment in resource_assignments:
-                    task = task_dict.get(assignment['task_id'])  # Использовать кэш
-                    if task and task['start'] and task['finish']:
+                    # Поиск задачи по комбинации имени и дат
+                    task = find_task_by_name_and_dates(
+                        self.tasks,
+                        assignment.get('task_name'),
+                        assignment.get('task_start'),
+                        assignment.get('task_finish')
+                    )
+                    if task and task.get('start') and task.get('finish'):
                         task_start = self._parse_date(task['start'])
                         task_end = self._parse_date(task['finish'])
                         
@@ -657,30 +603,15 @@ class MultiProjectParser:
         
         for parser in self.parsers:
             for resource in parser.resources:
-                resource_id = resource.get('id', '')
                 resource_name = resource.get('name', '')
                 
-                # Сначала проверяем по ID
-                if resource_id and resource_id in merged:
-                    # Ресурс с таким ID уже есть - пропускаем или обновляем
-                    existing = merged[resource_id]
-                    # Обновляем max_units если в новом больше
-                    existing_max = float(existing.get('max_units', 1.0))
-                    new_max = float(resource.get('max_units', 1.0))
-                    if new_max > existing_max:
-                        existing['max_units'] = str(new_max)
+                if not resource_name:
                     continue
                 
-                # Проверяем по имени (если ID нет или отличается)
-                found_by_name = None
-                for key, existing in merged.items():
-                    if existing.get('name') == resource_name:
-                        found_by_name = key
-                        break
-                
-                if found_by_name:
+                # Объединяем только по имени (парсим только по имени)
+                if resource_name in merged:
                     # Ресурс с таким именем уже есть - обновляем max_units
-                    existing = merged[found_by_name]
+                    existing = merged[resource_name]
                     existing_max = float(existing.get('max_units', 1.0))
                     new_max = float(resource.get('max_units', 1.0))
                     if new_max > existing_max:
@@ -688,11 +619,7 @@ class MultiProjectParser:
                     continue
                 
                 # Новый ресурс - добавляем
-                if resource_id:
-                    merged[resource_id] = resource.copy()
-                else:
-                    # Если нет ID, используем имя как ключ
-                    merged[resource_name] = resource.copy()
+                merged[resource_name] = resource.copy()
         
         self._merged_resources = list(merged.values())
         return self._merged_resources
@@ -768,26 +695,20 @@ class MultiProjectParser:
             resource_name = resource['name']
             max_units = float(resource.get('max_units', 1.0))
             
-            # Рассчитать доступную емкость (как в MSProjectParser)
+            # Рассчитать доступную емкость (используем утилиту)
             if date_range_start and date_range_end:
-                from datetime import datetime as dt_class
-                range_start_dt = dt_class.combine(date_range_start, dt_class.min.time())
-                range_end_dt = dt_class.combine(date_range_end, dt_class.max.time())
+                range_start = date_range_start
+                range_end = date_range_end
             else:
                 project_start, project_end = self.get_project_dates()
-                range_start_dt = project_start
-                range_end_dt = project_end
+                range_start = project_start
+                range_end = project_end
             
-            if range_start_dt and range_end_dt:
-                range_duration = range_end_dt - range_start_dt
-                calendar_days = range_duration.total_seconds() / (24 * 3600)
-                if calendar_days <= 0:
-                    available_work_hours_base = 8
-                else:
-                    workdays = calendar_days * (5.0 / 7.0)
-                    available_work_hours_base = workdays * 8
-            else:
-                available_work_hours_base = 160
+            available_work_hours_base = calculate_available_work_hours(
+                range_start,
+                range_end,
+                default_hours=160
+            )
             
             max_capacity = available_work_hours_base * max_units
             project_weeks = available_work_hours_base / 40
@@ -856,42 +777,21 @@ class MultiProjectParser:
         return result
     
     def _parse_date(self, date_string):
-        """Прокси-метод для парсинга дат (использует первый парсер)"""
-        if self.parsers:
-            return self.parsers[0]._parse_date(date_string)
-        return None
+        """Парсинг дат (использует утилиту)"""
+        return parse_date(date_string)
     
     def _parse_work_hours(self, work_string):
-        """Прокси-метод для парсинга часов работы (использует первый парсер)"""
-        if self.parsers:
-            return self.parsers[0]._parse_work_hours(work_string)
-        return 0
+        """Парсинг часов работы (использует утилиту)"""
+        return parse_work_hours(work_string)
     
     def get_resource_id_mapping(self):
-        """Создает маппинг resource_id -> resource_name для всех парсеров"""
-        mapping = {}
-        for parser in self.parsers:
-            for resource in parser.resources:
-                resource_id = resource.get('id', '')
-                resource_name = resource.get('name', '')
-                if resource_id and resource_name:
-                    mapping[resource_id] = resource_name
-        return mapping
+        """Создает маппинг resource_id -> resource_name для всех парсеров (для обратной совместимости)"""
+        # Больше не используется, так как парсим только по имени
+        return {}
     
     def get_assignments_for_resource(self, resource_name):
-        """Получить все назначения для ресурса по имени (работает с объединенными ресурсами)"""
-        assignments = []
-        resource_id_mapping = self.get_resource_id_mapping()
-        
-        # Найти все resource_id, которые соответствуют этому имени
-        resource_ids = [rid for rid, name in resource_id_mapping.items() if name == resource_name]
-        
-        # Найти все назначения с этими resource_id
-        for assignment in self.assignments:
-            if assignment.get('resource_id') in resource_ids:
-                assignments.append(assignment)
-        
-        return assignments
+        """Получить все назначения для ресурса по имени (парсим только по имени)"""
+        return [a for a in self.assignments if a.get('resource_name') == resource_name]
 
 # Analysis functions
 def analyze_workload(workload_data):
@@ -1103,8 +1003,9 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
     target_load = settings.get('target_load', 85)
     mode = settings.get('mode', 'balance')
     
-    # Получить временную загрузку и кэш задач с учётом диапазона
+    # Получить временную загрузку с учётом диапазона
     timeline_data = parser.get_timeline_workload(date_range_start, date_range_end)
+    # Создать task_dict по ID только для зависимостей (не для связывания назначений)
     task_dict = {t['id']: t for t in parser.tasks}
     
     # Найти перегруженные периоды для каждого ресурса
@@ -1136,7 +1037,7 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
         if isinstance(parser, MultiProjectParser):
             resource_assignments = parser.get_assignments_for_resource(resource_name)
         else:
-            resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+            resource_assignments = [a for a in parser.assignments if a.get('resource_name') == resource_name]
         
         # Построить карту недель для быстрого поиска (один раз на ресурс)
         # КРИТИЧНО: Использовать тот же диапазон что и в get_timeline_workload()
@@ -1189,8 +1090,14 @@ def optimize_with_task_shifting(parser, settings, date_range_start=None, date_ra
             # Найти задачи, пересекающиеся с этой неделей
             tasks_in_week = []
             for assignment in resource_assignments:
-                task = task_dict.get(assignment['task_id'])
-                if not task or not task['start'] or not task['finish']:
+                # Поиск задачи по комбинации имени и дат
+                task = find_task_by_name_and_dates(
+                    parser.tasks,
+                    assignment.get('task_name'),
+                    assignment.get('task_start'),
+                    assignment.get('task_finish')
+                )
+                if not task or not task.get('start') or not task.get('finish'):
                     continue
                 
                 task_start = parser._parse_date(task['start'])
@@ -1438,12 +1345,18 @@ def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimi
             if isinstance(parser, MultiProjectParser):
                 resource_assignments = parser.get_assignments_for_resource(resource_name)
             else:
-                resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+                resource_assignments = [a for a in parser.assignments if a.get('resource_name') == resource_name]
             
             for assignment in resource_assignments:
-                task = next((t for t in parser.tasks if t['id'] == assignment['task_id']), None)
+                # Поиск задачи по комбинации имени и дат
+                task = find_task_by_name_and_dates(
+                    parser.tasks,
+                    assignment.get('task_name'),
+                    assignment.get('task_start'),
+                    assignment.get('task_finish')
+                )
                 if task:
-                    task_id = task.get('id', '')
+                    task_id = task.get('id', 'N/A')  # Только для отладки
                     task_name = task.get('name', 'Без названия')
                     task_start = task.get('start', '')
                     task_finish = task.get('finish', '')
@@ -1685,12 +1598,18 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
             if isinstance(parser, MultiProjectParser):
                 resource_assignments = parser.get_assignments_for_resource(resource_name)
             else:
-                resource_assignments = [a for a in parser.assignments if a['resource_id'] == resource['id']]
+                resource_assignments = [a for a in parser.assignments if a.get('resource_name') == resource_name]
             
             for assignment in resource_assignments[:5]:  # До 5 задач на ресурс
                 if task_count >= max_tasks:
                     break
-                task = next((t for t in parser.tasks if t['id'] == assignment['task_id']), None)
+                # Поиск задачи по комбинации имени и дат
+                task = find_task_by_name_and_dates(
+                    parser.tasks,
+                    assignment.get('task_name'),
+                    assignment.get('task_start'),
+                    assignment.get('task_finish')
+                )
                 if task:
                     task_name = task.get('name', 'Без названия')[:30]  # Обрезать длинные имена
                     task_start = task.get('start', '')[:10] if task.get('start') else ''
@@ -1827,25 +1746,8 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
     buffer.seek(0)
     return buffer
 
-def calculate_business_days(start_date, end_date):
-    """Рассчитывает количество рабочих дней между двумя датами (исключая субботу и воскресенье)"""
-    if not start_date or not end_date:
-        return 0
-    
-    business_days = 0
-    current_date = start_date
-    
-    while current_date <= end_date:
-        # weekday(): 0=Monday, 1=Tuesday, ..., 6=Sunday
-        if current_date.weekday() < 5:  # 0-4 это пн-пт
-            business_days += 1
-        current_date += timedelta(days=1)
-    
-    return business_days
-
-def calculate_work_capacity(business_days):
-    """Рассчитывает рабочую емкость одного человека в часах (дни × 8 часов)"""
-    return business_days * 8
+# Функции calculate_business_days и calculate_work_capacity перенесены в msproject_utils
+# Импортируются из утилит в начале файла
 
 def calculate_actual_hours_per_resource(parser, date_start, date_end):
     """Рассчитывает фактические рабочие часы для каждого ресурса за указанный период"""
@@ -1902,26 +1804,24 @@ def calculate_actual_hours_per_resource(parser, date_start, date_end):
         overlap_start = max(task_start, date_start)
         overlap_end = min(task_end, date_end)
         
-        # Найти все назначения для этой задачи
-        task_assignments = [a for a in parser.assignments if a['task_id'] == task['id']]
+        # Найти все назначения для этой задачи по комбинации имени и дат
+        task_name = task.get('name', '')
+        task_start_str = task.get('start', '')
+        task_finish_str = task.get('finish', '')
+        
+        task_assignments = [
+            a for a in parser.assignments
+            if a.get('task_name') == task_name
+            and a.get('task_start') == task_start_str
+            and a.get('task_finish') == task_finish_str
+        ]
         
         for assignment in task_assignments:
-            resource_id = assignment.get('resource_id')
-            if not resource_id:
+            # Используем имя ресурса напрямую (парсим только по имени)
+            resource_name = assignment.get('resource_name')
+            if not resource_name:
                 continue
-                
-            # Найти имя ресурса
-            # Для MultiProjectParser использовать маппинг
-            if isinstance(parser, MultiProjectParser):
-                resource_id_mapping = parser.get_resource_id_mapping()
-                resource_name = resource_id_mapping.get(resource_id)
-                if not resource_name:
-                    continue
-            else:
-                resource = next((r for r in parser.resources if r['id'] == resource_id), None)
-                if not resource:
-                    continue
-                resource_name = resource['name']
+            
             work_hours = parser._parse_work_hours(assignment.get('work', '0'))
             
             # Пропорция задачи в выбранном диапазоне
@@ -1971,6 +1871,54 @@ if 'pending_conflicts' not in st.session_state:
     st.session_state.pending_conflicts = []
 if 'display_mode' not in st.session_state:
     st.session_state.display_mode = 'percentage'  # По умолчанию проценты
+if 'uploaded_file_contents' not in st.session_state:
+    st.session_state.uploaded_file_contents = {}
+if 'uploaded_file_names' not in st.session_state:
+    st.session_state.uploaded_file_names = []
+
+# Настройка логирования для Streamlit (после инициализации session_state)
+class StreamlitHandler(logging.Handler):
+    """Обработчик логирования для вывода в Streamlit"""
+    def __init__(self, logs_list):
+        super().__init__()
+        self.logs_list = logs_list
+    
+    def emit(self, record):
+        try:
+            log_entry = self.format(record)
+            if self.logs_list is not None:
+                self.logs_list.append(log_entry)
+                # Ограничиваем количество логов (последние 1000)
+                if len(self.logs_list) > 1000:
+                    self.logs_list[:] = self.logs_list[-1000:]
+        except Exception:
+            pass  # Игнорируем ошибки при логировании
+
+# Инициализация логирования после session_state
+if 'parsing_logs' not in st.session_state:
+    st.session_state.parsing_logs = []
+
+# Создаем handler только если session_state инициализирован
+streamlit_handler = StreamlitHandler(st.session_state.parsing_logs)
+streamlit_handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
+streamlit_handler.setLevel(logging.DEBUG)
+
+# Настраиваем логирование для модулей парсинга
+resource_logger = logging.getLogger('resource_parser')
+assignment_logger = logging.getLogger('assignment_parser')
+
+# Удаляем старые handlers, если есть
+for handler in resource_logger.handlers[:]:
+    resource_logger.removeHandler(handler)
+for handler in assignment_logger.handlers[:]:
+    assignment_logger.removeHandler(handler)
+
+resource_logger.setLevel(logging.DEBUG)
+assignment_logger.setLevel(logging.DEBUG)
+resource_logger.addHandler(streamlit_handler)
+assignment_logger.addHandler(streamlit_handler)
+resource_logger.propagate = False  # Отключаем распространение, чтобы избежать дублирования
+assignment_logger.propagate = False
 
 # Main application
 def main():
@@ -2017,12 +1965,45 @@ def main():
             help="Загрузите один или несколько XML-файлов Microsoft Project для анализа"
         )
         
+        # Сохранить содержимое файлов в session_state сразу после загрузки
+        # Это предотвратит ошибку 400 при rerun()
+        if uploaded_files is not None and len(uploaded_files) > 0:
+            # Проверить, изменились ли загруженные файлы
+            current_file_names = [f.name for f in uploaded_files]
+            saved_file_names = st.session_state.get('uploaded_file_names', [])
+            
+            if current_file_names != saved_file_names:
+                # Файлы изменились - сохранить их содержимое
+                st.session_state.uploaded_file_contents = {}
+                st.session_state.uploaded_file_names = []
+                
+                for uploaded_file in uploaded_files:
+                    try:
+                        file_content = uploaded_file.getvalue()
+                        st.session_state.uploaded_file_contents[uploaded_file.name] = file_content
+                        st.session_state.uploaded_file_names.append(uploaded_file.name)
+                    except (AttributeError, RuntimeError, OSError) as e:
+                        # Ошибка 400 или файл недоступен - попробуем использовать сохраненное содержимое
+                        if uploaded_file.name in st.session_state.get('uploaded_file_contents', {}):
+                            # Файл уже сохранен, используем его
+                            continue
+                        else:
+                            st.warning(f"⚠️ Не удалось сохранить файл {uploaded_file.name}: {str(e)}. Попробуйте загрузить файл снова.")
+                    except Exception as e:
+                        st.warning(f"⚠️ Не удалось сохранить файл {uploaded_file.name}: {str(e)}")
+        
         # Проверить наличие загруженных файлов
-        has_files = uploaded_files is not None and len(uploaded_files) > 0
+        has_files = (uploaded_files is not None and len(uploaded_files) > 0) or \
+                    (st.session_state.get('uploaded_file_names') is not None and len(st.session_state.get('uploaded_file_names', [])) > 0)
         
         if has_files:
-            file_count = len(uploaded_files)
-            file_names = [f.name for f in uploaded_files]
+            # Использовать сохраненные имена файлов, если uploaded_files недоступен
+            if uploaded_files is not None and len(uploaded_files) > 0:
+                file_count = len(uploaded_files)
+                file_names = [f.name for f in uploaded_files]
+            else:
+                file_names = st.session_state.get('uploaded_file_names', [])
+                file_count = len(file_names)
             
             if file_count == 1:
                 st.success(f"✓ {file_names[0]} загружен")
@@ -2035,31 +2016,77 @@ def main():
             button_text = "🔄 Анализировать файл" if file_count == 1 else f"🔄 Анализировать {file_count} файлов"
             if st.button(button_text, use_container_width=True):
                 with st.spinner(f"Анализ {file_count} файл(ов) MS Project..."):
-                    # Использовать uploaded_files напрямую из st.file_uploader
-                    if not uploaded_files or len(uploaded_files) == 0:
-                        st.error("Нет файлов для анализа")
+                    # Использовать сохраненное содержимое файлов из session_state
+                    file_contents = st.session_state.get('uploaded_file_contents', {})
+                    file_names_to_process = st.session_state.get('uploaded_file_names', [])
+                    
+                    # Если файлы еще доступны напрямую, попробовать использовать их
+                    if uploaded_files is not None and len(uploaded_files) > 0:
+                        # Обновить сохраненное содержимое на случай, если файлы изменились
+                        for uploaded_file in uploaded_files:
+                            try:
+                                file_content = uploaded_file.getvalue()
+                                file_contents[uploaded_file.name] = file_content
+                                if uploaded_file.name not in file_names_to_process:
+                                    file_names_to_process.append(uploaded_file.name)
+                            except (AttributeError, RuntimeError, OSError) as e:
+                                # Ошибка 400 или файл недоступен - используем сохраненное содержимое
+                                if uploaded_file.name not in file_contents:
+                                    # Если файл не сохранен, добавим его в список неудачных
+                                    if uploaded_file.name not in file_names_to_process:
+                                        file_names_to_process.append(uploaded_file.name)
+                            except Exception as e:
+                                # Если не удалось получить напрямую, используем сохраненное
+                                if uploaded_file.name not in file_contents:
+                                    if uploaded_file.name not in file_names_to_process:
+                                        file_names_to_process.append(uploaded_file.name)
+                    
+                    if not file_contents or len(file_names_to_process) == 0:
+                        st.error("Нет файлов для анализа. Пожалуйста, загрузите файлы снова.")
                     else:
                         # Создать парсер для каждого файла
                         parsers = []
                         all_resources = []
                         failed_files = []
+                        parser_to_file_name = {}  # Маппинг parser -> file_name
                         
-                        for uploaded_file in uploaded_files:
+                        for file_name in file_names_to_process:
                             try:
-                                file_content = uploaded_file.getvalue()
+                                # Получить содержимое из session_state
+                                file_content = file_contents.get(file_name)
+                                
+                                if file_content is None:
+                                    failed_files.append(f"{file_name}: файл недоступен")
+                                    continue
+                                
                                 parser = MSProjectParser(file_content)
                                 if parser.parse():
                                     parsers.append(parser)
                                     all_resources.extend(parser.resources)
+                                    # Сохранить маппинг parser -> file_name
+                                    parser_to_file_name[parser] = file_name
+                                    
+                                    # Показываем логи парсинга
+                                    if 'parsing_logs' in st.session_state and st.session_state.parsing_logs:
+                                        with st.expander(f"📋 Логи парсинга: {file_name}", expanded=True):
+                                            log_text = "\n".join(st.session_state.parsing_logs)
+                                            if log_text:
+                                                st.code(log_text, language='text')
+                                                st.caption(f"Всего записей в логе: {len(st.session_state.parsing_logs)}")
+                                            else:
+                                                st.info("Логи пусты")
                                 else:
-                                    failed_files.append(uploaded_file.name)
+                                    failed_files.append(file_name)
                             except Exception as e:
-                                failed_files.append(f"{uploaded_file.name}: {str(e)}")
+                                failed_files.append(f"{file_name}: {str(e)}")
                         
                         if failed_files:
                             st.warning(f"⚠️ Не удалось проанализировать {len(failed_files)} файл(ов): {', '.join(failed_files)}")
                         
                         if parsers:
+                            # Сохранить маппинг parser -> file_name в session_state
+                            st.session_state.parser_to_file_name = parser_to_file_name
+                            
                             # Обнаружение конфликтов между сотрудниками из всех XML и сохраненными
                             conflicts = detect_conflicts(st.session_state.saved_resources, all_resources)
                             
@@ -2154,13 +2181,11 @@ def main():
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown("**В файле:**")
-                        st.text(f"ID: {existing.get('id', 'N/A')}")
                         st.text(f"Имя: {existing.get('name', 'N/A')}")
                         st.text(f"Max Units: {existing.get('max_units', 'N/A')}")
                     
                     with col2:
                         st.markdown("**Из XML:**")
-                        st.text(f"ID: {new.get('id', 'N/A')}")
                         st.text(f"Имя: {new.get('name', 'N/A')}")
                         st.text(f"Max Units: {new.get('max_units', 'N/A')}")
                     
@@ -2373,320 +2398,903 @@ def main():
         st.markdown("---")
         
         # Объединенная секция управления персоналом
-        st.markdown("### 👥 Управление персоналом")
-        
-        # Инициализация applied_group если нужно
-        if not hasattr(st.session_state, 'applied_group'):
-            st.session_state.applied_group = None
-        
-        # Инициализация переменных для использования вне табов
-        selected_resources = []
-        display_data = workload_data
-        
-        # Три таба: Текущий выбор, Сохраненные группы и Управление сотрудниками
-        tab1, tab2, tab3 = st.tabs(["🔍 Текущий выбор", "💾 Сохраненные группы", "👤 Управление сотрудниками"])
-        
-        # ========== ТАБ 1: ТЕКУЩИЙ ВЫБОР ==========
-        with tab1:
-            all_names = [item['resource_name'] for item in workload_data]
+        with st.expander("### 👥 Управление персоналом", expanded=True):
+            # Инициализация applied_group если нужно
+            if not hasattr(st.session_state, 'applied_group'):
+                st.session_state.applied_group = None
+            # Инициализация selected_resources_state для синхронизации выбора ресурсов
+            if 'selected_resources_state' not in st.session_state:
+                st.session_state.selected_resources_state = None
+            # Инициализация счетчика для динамического ключа multiselect
+            if 'multiselect_key_counter' not in st.session_state:
+                st.session_state.multiselect_key_counter = 0
             
-            # Поиск по имени
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                search_term = st.text_input("Поиск по фамилии или имени:", placeholder="например, Иванов")
-            with col2:
-                st.markdown("<br>", unsafe_allow_html=True)
-                show_all = st.checkbox("Показать всех", value=True)
+            # Инициализация переменных для использования вне табов
+            selected_resources = []
+            display_data = workload_data
             
-            # Фильтрация данных по поиску
-            if show_all or not search_term:
-                filtered_data = workload_data
-            else:
-                filtered_data = [item for item in workload_data 
-                               if search_term.lower() in item['resource_name'].lower()]
+            # Три таба: Текущий выбор, Управление группами и Управление сотрудниками
+            tab1, tab2, tab3 = st.tabs(["🔍 Текущий выбор", "⚙️ Управление группами", "👤 Управление сотрудниками"])
             
-            if not filtered_data:
-                st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
-                selected_resources = []
-                display_data = []
-            else:
-                # Определить default значения для multiselect
-                if st.session_state.applied_group:
-                    # Группа применена: использовать ресурсы из группы как default (но не ограничивать options)
-                    group_name, group_resources = st.session_state.applied_group
-                    st.info(f"📌 Применена группа '{group_name}' ({len(group_resources)} чел.). Вы можете добавить дополнительные ресурсы из списка ниже.")
-                    # Default - только ресурсы из группы, которые есть в filtered_data
-                    default_resources = [name for name in group_resources 
-                                       if name in [item['resource_name'] for item in filtered_data]]
-                else:
-                    # Группа не применена: выбрать всех из filtered_data
-                    default_resources = [item['resource_name'] for item in filtered_data]
-                
-                # Множественный выбор - options всегда содержат ВСЕ ресурсы из filtered_data
-                selected_resources = st.multiselect(
-                    "Выберите конкретные ресурсы для анализа:",
-                    options=[item['resource_name'] for item in filtered_data],
-                    default=default_resources,
-                    key="current_selection_multiselect"
-                )
-                
-                # НОВАЯ ФУНКЦИЯ: Быстрое сохранение текущего выбора как группы
-                if selected_resources and len(selected_resources) > 0:
+            # ========== ТАБ 1: ТЕКУЩИЙ ВЫБОР ==========
+            with tab1:
+                # Выбор из сохраненных групп
+                if st.session_state.resource_groups:
+                    st.markdown("**Выбрать из сохраненных групп:**")
+                    sorted_group_names = sorted(st.session_state.resource_groups.keys(), key=str.lower)
+                    group_names = ["-- Не выбрано --"] + sorted_group_names
+                    selected_group_tab1 = st.selectbox(
+                        "Выберите группу:",
+                        options=group_names,
+                        key="selected_group_tab1_dropdown"
+                    )
+                    
+                    # Кнопка для применения группы
+                    if selected_group_tab1 != "-- Не выбрано --":
+                        group_resources_tab1 = st.session_state.resource_groups[selected_group_tab1]
+                        st.caption(f"👥 {len(group_resources_tab1)} человек: {', '.join(group_resources_tab1[:3])}{'...' if len(group_resources_tab1) > 3 else ''}")
+                        
+                        if st.button("✅ Применить группу", key="apply_group_tab1_btn"):
+                            st.session_state.applied_group = (selected_group_tab1, group_resources_tab1)
+                            # Обновить selected_resources_state списком ресурсов из группы
+                            st.session_state.selected_resources_state = group_resources_tab1.copy()
+                            # Увеличить счетчик для принудительного пересоздания multiselect
+                            st.session_state.multiselect_key_counter += 1
+                            st.success(f"✓ Группа '{selected_group_tab1}' применена ({len(group_resources_tab1)} чел.)")
+                            st.rerun()
+                    
                     st.markdown("---")
-                    with st.expander("💾 Сохранить текущий выбор как группу"):
-                        quick_group_name = st.text_input(
-                            "Название новой группы:",
-                            placeholder="например, Команда А",
-                            key="quick_save_group_name"
-                        )
-                        if st.button("💾 Сохранить", key="quick_save_btn"):
-                            if not quick_group_name:
-                                st.error("Введите название группы")
-                            elif quick_group_name in st.session_state.resource_groups:
-                                st.error("Группа с таким названием уже существует")
-                            else:
-                                st.session_state.resource_groups[quick_group_name] = selected_resources.copy()
-                                # Сохранить в файл
-                                save_employees_data(
-                                    st.session_state.saved_resources,
-                                    st.session_state.resource_groups
-                                )
-                                st.success(f"✓ Группа '{quick_group_name}' создана ({len(selected_resources)} чел.)")
-                                st.rerun()
                 
-                if selected_resources:
-                    display_data = [item for item in filtered_data 
-                                  if item['resource_name'] in selected_resources]
+                all_names = sorted([item['resource_name'] for item in workload_data], key=str.lower)
+                
+                # Поиск по имени
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    search_term = st.text_input("Поиск по фамилии или имени:", placeholder="например, Иванов")
+                with col2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    show_all = st.checkbox("Показать всех", value=True)
+                
+                # Фильтрация данных по поиску
+                if show_all or not search_term:
+                    filtered_data = workload_data
                 else:
-                    display_data = filtered_data
-        
-        # ========== ТАБ 2: СОХРАНЕННЫЕ ГРУППЫ ==========
-        with tab2:
-            # Выбор и применение сохраненной группы
-            if st.session_state.resource_groups:
-                st.markdown("**Применить сохраненную группу:**")
-                group_names = ["-- Не выбрано --"] + list(st.session_state.resource_groups.keys())
-                selected_group = st.selectbox(
-                    "Выберите группу:",
-                    options=group_names,
-                    key="selected_group_dropdown"
-                )
+                    filtered_data = [item for item in workload_data 
+                                   if search_term.lower() in item['resource_name'].lower()]
                 
-                # Кнопка для применения группы
-                if selected_group != "-- Не выбрано --":
-                    group_resources = st.session_state.resource_groups[selected_group]
-                    st.caption(f"👥 {len(group_resources)} человек: {', '.join(group_resources[:3])}{'...' if len(group_resources) > 3 else ''}")
-                    
-                    if st.button("✅ Применить группу", key="apply_group_btn"):
-                        st.session_state.applied_group = (selected_group, group_resources)
-                        st.success(f"✓ Группа '{selected_group}' применена ({len(group_resources)} чел.)")
-                        st.rerun()
+                # Сортировка filtered_data по алфавиту
+                filtered_data = sorted(filtered_data, key=lambda x: x['resource_name'].lower())
                 
-                st.markdown("---")
-            else:
-                st.info("У вас пока нет сохраненных групп. Создайте новую ниже.")
-            
-            # Создание новой группы с нуля
-            st.markdown("**Создать новую группу:**")
-            with st.expander("➕ Создать группу", expanded=not st.session_state.resource_groups):
-                new_group_name = st.text_input("Название группы:", placeholder="например, Разработчики", key="new_group_name_input")
+                # Получить список всех ресурсов из XML (не отфильтрованных поиском)
+                # Использовать workload_data, чтобы всегда иметь все ресурсы из XML
+                xml_resource_names = [item['resource_name'] for item in workload_data] if workload_data else []
                 
-                all_names = [item['resource_name'] for item in workload_data]
-                new_group_resources = st.multiselect(
-                    "Выберите участников группы:",
-                    options=all_names,
-                    key="new_group_resources"
-                )
+                # Определить состав группы, если она применена
+                group_resources_for_select = []
+                if st.session_state.applied_group:
+                    group_name, group_resources = st.session_state.applied_group
+                    group_resources_for_select = group_resources.copy()
                 
-                if st.button("💾 Сохранить группу", key="save_new_group_btn"):
-                    if not new_group_name:
-                        st.error("Введите название группы")
-                    elif not new_group_resources:
-                        st.error("Выберите хотя бы одного участника")
-                    elif new_group_name in st.session_state.resource_groups:
-                        st.error("Группа с таким названием уже существует")
+                # Объединить ресурсы из XML и группы для options в multiselect
+                # Сначала ресурсы из группы (чтобы они были видны), затем из XML
+                all_options = []
+                # Добавить ресурсы из группы
+                for name in group_resources_for_select:
+                    if name not in all_options:
+                        all_options.append(name)
+                # Добавить ресурсы из XML, которых еще нет
+                for name in xml_resource_names:
+                    if name not in all_options:
+                        all_options.append(name)
+                # Сортировать по алфавиту
+                all_options = sorted(all_options, key=str.lower)
+                
+                if not filtered_data and not group_resources_for_select:
+                    st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
+                    selected_resources = []
+                    display_data = []
+                else:
+                    # Определить default значения для multiselect
+                    if st.session_state.applied_group:
+                        # Группа применена: использовать selected_resources_state или ресурсы из группы
+                        group_name, group_resources = st.session_state.applied_group
+                        st.info(f"📌 Применена группа '{group_name}' ({len(group_resources)} чел.). Вы можете добавить дополнительные ресурсы из списка ниже.")
+                        # Использовать selected_resources_state, если он установлен, иначе использовать ресурсы из группы
+                        if st.session_state.selected_resources_state is not None:
+                            default_resources = st.session_state.selected_resources_state.copy()
+                        else:
+                            default_resources = group_resources.copy()
                     else:
-                        st.session_state.resource_groups[new_group_name] = new_group_resources
-                        # Сохранить в файл
-                        save_employees_data(
-                            st.session_state.saved_resources,
-                            st.session_state.resource_groups
-                        )
-                        st.success(f"✓ Группа '{new_group_name}' создана ({len(new_group_resources)} чел.)")
-                        st.rerun()
-            
-            # Управление существующими группами
-            if st.session_state.resource_groups:
-                st.markdown("---")
-                st.markdown("**Управление группами:**")
-                for group_name in list(st.session_state.resource_groups.keys()):
-                    group_members = st.session_state.resource_groups[group_name]
+                        # Группа не применена: использовать selected_resources_state или всех из filtered_data
+                        if st.session_state.selected_resources_state is not None:
+                            default_resources = st.session_state.selected_resources_state.copy()
+                        else:
+                            default_resources = xml_resource_names.copy()
                     
-                    # Заголовок группы с кнопкой удаления
-                    col1, col2 = st.columns([4, 1])
-                    with col1:
-                        st.markdown(f"**{group_name}** ({len(group_members)} чел.)")
-                    with col2:
-                        if st.button("🗑️", key=f"delete_{group_name}", help=f"Удалить группу '{group_name}'"):
-                            del st.session_state.resource_groups[group_name]
-                            if st.session_state.applied_group and st.session_state.applied_group[0] == group_name:
-                                st.session_state.applied_group = None
+                    # Определить ресурсы, которых нет в XML (для подсветки)
+                    resources_not_in_xml = [name for name in all_options if name not in xml_resource_names]
+                    
+                    # Добавить CSS и JavaScript для подсветки ресурсов, которых нет в XML
+                    if resources_not_in_xml:
+                        # Создать JSON-строку для JavaScript
+                        resources_not_in_xml_json = json.dumps(resources_not_in_xml, ensure_ascii=False)
+                        
+                        highlight_css_js = f"""
+                        <style>
+                            /* Подсветка опций multiselect, которых нет в XML */
+                            div[data-baseweb="select"] ul[role="listbox"] li {{
+                                transition: background-color 0.2s;
+                            }}
+                            
+                            /* Желтая подсветка для ресурсов, которых нет в XML */
+                            div[data-baseweb="select"] ul[role="listbox"] li[data-resource-not-in-xml="true"] {{
+                                background-color: #FFF9C4 !important;
+                                border-left: 3px solid #FBC02D !important;
+                            }}
+                            
+                            div[data-baseweb="select"] ul[role="listbox"] li[data-resource-not-in-xml="true"]:hover {{
+                                background-color: #FFF59D !important;
+                            }}
+                            
+                            /* Подсветка выбранных опций, которых нет в XML */
+                            div[data-baseweb="select"] ul[role="listbox"] li[data-resource-not-in-xml="true"][aria-selected="true"] {{
+                                background-color: #FFF176 !important;
+                            }}
+                            
+                            /* Желтая подсветка для выбранных элементов (chips), которых нет в XML */
+                            div[data-baseweb="select"] span[data-resource-not-in-xml="true"],
+                            div[data-baseweb="select"] div[data-resource-not-in-xml="true"],
+                            div[data-baseweb="select"] [data-resource-not-in-xml="true"] {{
+                                background-color: #FFF9C4 !important;
+                                color: #856404 !important;
+                                border: 1px solid #FBC02D !important;
+                                border-radius: 4px !important;
+                                padding: 2px 6px !important;
+                                margin: 2px !important;
+                            }}
+                            
+                            /* Стили для выбранных значений в multiselect через data-baseweb */
+                            div[data-baseweb="select"] [data-baseweb="tag"][data-resource-not-in-xml="true"],
+                            div[data-baseweb="select"] [data-baseweb="multiValue"][data-resource-not-in-xml="true"] {{
+                                background-color: #FFF9C4 !important;
+                                color: #856404 !important;
+                                border: 1px solid #FBC02D !important;
+                            }}
+                            
+                            /* Универсальный селектор для всех элементов с атрибутом */
+                            [data-resource-not-in-xml="true"] {{
+                                background-color: #FFF9C4 !important;
+                                color: #856404 !important;
+                                border: 1px solid #FBC02D !important;
+                            }}
+                        </style>
+                        <script>
+                            (function() {{
+                                const resourcesNotInXml = {resources_not_in_xml_json};
+                                
+                                function highlightResources() {{
+                                    // Найти все multiselect контейнеры
+                                    const selectContainers = document.querySelectorAll('div[data-baseweb="select"]');
+                                    
+                                    selectContainers.forEach(selectContainer => {{
+                                        // Проверить, что это нужный multiselect (по label или key)
+                                        const label = selectContainer.closest('.stMultiSelect') || 
+                                                     selectContainer.closest('[data-testid*="stMultiSelect"]');
+                                        
+                                        if (!label) return;
+                                        
+                                        // Найти список опций
+                                        const listbox = selectContainer.querySelector('ul[role="listbox"]');
+                                        if (listbox) {{
+                                            // Пройти по всем опциям
+                                            const options = listbox.querySelectorAll('li[role="option"]');
+                                            options.forEach(option => {{
+                                                const optionText = option.textContent.trim();
+                                                // Проверить, есть ли этот ресурс в списке тех, кого нет в XML
+                                                if (resourcesNotInXml.some(resource => optionText === resource)) {{
+                                                    option.setAttribute('data-resource-not-in-xml', 'true');
+                                                }} else {{
+                                                    option.removeAttribute('data-resource-not-in-xml');
+                                                }}
+                                            }});
+                                        }}
+                                        
+                                        // Найти выбранные элементы (chips/tags)
+                                        // В Streamlit multiselect выбранные значения находятся в разных местах
+                                        // Попробуем найти их через различные селекторы
+                                        
+                                        // Метод 1: Найти через data-baseweb="tag" или data-baseweb="multiValue"
+                                        const tags1 = selectContainer.querySelectorAll('[data-baseweb="tag"], [data-baseweb="multiValue"]');
+                                        tags1.forEach(tag => {{
+                                            const text = tag.textContent.trim();
+                                            if (text && resourcesNotInXml.some(resource => text === resource)) {{
+                                                tag.setAttribute('data-resource-not-in-xml', 'true');
+                                                tag.style.setProperty('background-color', '#FFF9C4', 'important');
+                                                tag.style.setProperty('color', '#856404', 'important');
+                                                tag.style.setProperty('border', '1px solid #FBC02D', 'important');
+                                            }}
+                                        }});
+                                        
+                                        // Метод 2: Найти все span и div, которые не в dropdown
+                                        const allElements = selectContainer.querySelectorAll('span, div');
+                                        allElements.forEach(element => {{
+                                            // Пропустить элементы внутри dropdown
+                                            if (element.closest('ul[role="listbox"]')) {{
+                                                return;
+                                            }}
+                                            
+                                            // Пропустить элементы, которые уже обработаны
+                                            if (element.closest('[data-baseweb="tag"]') || element.closest('[data-baseweb="multiValue"]')) {{
+                                                return;
+                                            }}
+                                            
+                                            const text = element.textContent.trim();
+                                            // Проверить точное совпадение с ресурсами, которых нет в XML
+                                            let matchingResource = null;
+                                            for (let i = 0; i < resourcesNotInXml.length; i++) {{
+                                                const resource = resourcesNotInXml[i];
+                                                // Точное совпадение или совпадение с учетом пробелов
+                                                if (text === resource || text.replace(/\\s+/g, ' ') === resource.replace(/\\s+/g, ' ')) {{
+                                                    matchingResource = resource;
+                                                    break;
+                                                }}
+                                            }}
+                                            
+                                            if (matchingResource) {{
+                                                // Проверить, что это не пустой элемент и не часть структуры
+                                                if (text.length > 0 && text.length < 200 && !element.querySelector('svg') && !element.querySelector('input')) {{
+                                                    // Проверить, что это не родительский элемент с множеством дочерних
+                                                    if (element.children.length < 3) {{
+                                                        element.setAttribute('data-resource-not-in-xml', 'true');
+                                                        // Применить стили с !important через setProperty
+                                                        element.style.setProperty('background-color', '#FFF9C4', 'important');
+                                                        element.style.setProperty('color', '#856404', 'important');
+                                                        element.style.setProperty('border', '1px solid #FBC02D', 'important');
+                                                        element.style.setProperty('border-radius', '4px', 'important');
+                                                        element.style.setProperty('padding', '2px 6px', 'important');
+                                                        element.style.setProperty('margin', '2px', 'important');
+                                                        element.style.setProperty('display', 'inline-block', 'important');
+                                                    }}
+                                                }}
+                                            }} else if (element.hasAttribute('data-resource-not-in-xml')) {{
+                                                // Убрать стили, если элемент больше не соответствует
+                                                element.removeAttribute('data-resource-not-in-xml');
+                                                element.style.removeProperty('background-color');
+                                                element.style.removeProperty('color');
+                                                element.style.removeProperty('border');
+                                                element.style.removeProperty('border-radius');
+                                                element.style.removeProperty('padding');
+                                                element.style.removeProperty('margin');
+                                                element.style.removeProperty('display');
+                                            }}
+                                        }});
+                                    }});
+                                }}
+                                
+                                // Выполнить при загрузке
+                                if (document.readyState === 'loading') {{
+                                    document.addEventListener('DOMContentLoaded', highlightResources);
+                                }} else {{
+                                    highlightResources();
+                                }}
+                                
+                                // Выполнить при изменении (для динамического обновления)
+                                const observer = new MutationObserver(function(mutations) {{
+                                    let shouldHighlight = false;
+                                    mutations.forEach(function(mutation) {{
+                                        if (mutation.addedNodes.length > 0 || mutation.type === 'childList') {{
+                                            shouldHighlight = true;
+                                        }}
+                                    }});
+                                    if (shouldHighlight) {{
+                                        setTimeout(highlightResources, 50);
+                                    }}
+                                }});
+                                
+                                observer.observe(document.body, {{
+                                    childList: true,
+                                    subtree: true
+                                }});
+                                
+                                // Также выполнить после небольшой задержки для Streamlit
+                                setTimeout(highlightResources, 100);
+                                setTimeout(highlightResources, 300);
+                                setTimeout(highlightResources, 500);
+                                setTimeout(highlightResources, 1000);
+                                setTimeout(highlightResources, 2000);
+                                
+                                // Выполнить при клике (для обновления при открытии dropdown)
+                                document.addEventListener('click', function() {{
+                                    setTimeout(highlightResources, 100);
+                                }});
+                                
+                                // Выполнить при изменении значения (для обновления выбранных элементов)
+                                function setupInputObserver() {{
+                                    const selectContainers = document.querySelectorAll('div[data-baseweb="select"]');
+                                    selectContainers.forEach(container => {{
+                                        const inputObserver = new MutationObserver(function(mutations) {{
+                                            let shouldUpdate = false;
+                                            mutations.forEach(function(mutation) {{
+                                                if (mutation.type === 'childList' || mutation.type === 'attributes') {{
+                                                    shouldUpdate = true;
+                                                }}
+                                            }});
+                                            if (shouldUpdate) {{
+                                                setTimeout(highlightResources, 50);
+                                            }}
+                                        }});
+                                        
+                                        inputObserver.observe(container, {{
+                                            childList: true,
+                                            subtree: true,
+                                            attributes: true,
+                                            attributeFilter: ['class', 'style']
+                                        }});
+                                    }});
+                                }}
+                                
+                                // Настроить observer после небольшой задержки
+                                setTimeout(setupInputObserver, 200);
+                                setTimeout(setupInputObserver, 1000);
+                            }})();
+                        </script>
+                        """
+                        st.markdown(highlight_css_js, unsafe_allow_html=True)
+                    
+                    # Множественный выбор - options содержат ресурсы из группы + ресурсы из XML
+                    # Использовать динамический ключ для принудительного пересоздания виджета при применении группы
+                    multiselect_key = f"current_selection_multiselect_{st.session_state.multiselect_key_counter}"
+                    selected_resources = st.multiselect(
+                        "Выберите конкретные ресурсы для анализа:",
+                        options=all_options,
+                        default=default_resources,
+                        key=multiselect_key
+                    )
+                    
+                    # Синхронизировать изменения в multiselect с selected_resources_state
+                    current_state = st.session_state.selected_resources_state
+                    if current_state is None or selected_resources != current_state:
+                        st.session_state.selected_resources_state = selected_resources.copy()
+                    
+                    # НОВАЯ ФУНКЦИЯ: Быстрое сохранение текущего выбора как группы
+                    if selected_resources and len(selected_resources) > 0:
+                        st.markdown("---")
+                        with st.expander("💾 Сохранить текущий выбор как группу"):
+                            # Инициализация состояния диалога
+                            if 'group_save_dialog' not in st.session_state:
+                                st.session_state.group_save_dialog = None
+                            if 'group_save_new_name' not in st.session_state:
+                                st.session_state.group_save_new_name = ""
+                            
+                            quick_group_name = st.text_input(
+                                "Название новой группы:",
+                                placeholder="например, Команда А",
+                                key="quick_save_group_name"
+                            )
+                            
+                            # Если диалог активен для этой группы, показать диалог выбора
+                            if st.session_state.group_save_dialog == quick_group_name and quick_group_name:
+                                st.warning(f"Группа '{quick_group_name}' уже существует. Выберите действие:")
+                                
+                                save_action = st.radio(
+                                    "Что вы хотите сделать?",
+                                    ["Перезаписать группу", "Создать новую группу", "Отменить"],
+                                    key="group_save_action_radio"
+                                )
+                                
+                                # Если выбрано "Создать новую группу", показать поле для нового имени
+                                if save_action == "Создать новую группу":
+                                    st.session_state.group_save_new_name = st.text_input(
+                                        "Введите название новой группы:",
+                                        value=st.session_state.group_save_new_name,
+                                        placeholder="например, Команда А (копия)",
+                                        key="group_save_new_name_input"
+                                    )
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    if st.button("✅ Подтвердить", key="confirm_save_btn"):
+                                        if save_action == "Перезаписать группу":
+                                            # Перезаписать группу с новым составом
+                                            st.session_state.resource_groups[quick_group_name] = selected_resources.copy()
+                                            # Обновить примененную группу, если она была изменена
+                                            if st.session_state.applied_group and st.session_state.applied_group[0] == quick_group_name:
+                                                st.session_state.applied_group = (quick_group_name, selected_resources.copy())
+                                                # Обновить selected_resources_state списком ресурсов из перезаписанной группы
+                                                st.session_state.selected_resources_state = selected_resources.copy()
+                                            # Сохранить в файл
+                                            save_employees_data(
+                                                st.session_state.saved_resources,
+                                                st.session_state.resource_groups
+                                            )
+                                            st.success(f"✓ Группа '{quick_group_name}' перезаписана ({len(selected_resources)} чел.)")
+                                            st.session_state.group_save_dialog = None
+                                            st.session_state.group_save_new_name = ""
+                                            st.rerun()
+                                        elif save_action == "Создать новую группу":
+                                            # Создать новую группу с новым именем
+                                            new_name = st.session_state.group_save_new_name
+                                            if not new_name:
+                                                st.error("Введите название новой группы")
+                                            elif new_name in st.session_state.resource_groups:
+                                                st.error("Группа с таким названием уже существует")
+                                            else:
+                                                st.session_state.resource_groups[new_name] = selected_resources.copy()
+                                                # Сохранить в файл
+                                                save_employees_data(
+                                                    st.session_state.saved_resources,
+                                                    st.session_state.resource_groups
+                                                )
+                                                st.success(f"✓ Группа '{new_name}' создана ({len(selected_resources)} чел.)")
+                                                st.session_state.group_save_dialog = None
+                                                st.session_state.group_save_new_name = ""
+                                                st.rerun()
+                                        else:  # Отменить
+                                            st.session_state.group_save_dialog = None
+                                            st.session_state.group_save_new_name = ""
+                                            st.rerun()
+                                with col2:
+                                    if st.button("❌ Отменить", key="cancel_save_btn"):
+                                        st.session_state.group_save_dialog = None
+                                        st.session_state.group_save_new_name = ""
+                                        st.rerun()
+                            else:
+                                # Кнопка сохранения (показывается только когда диалог не активен)
+                                if st.button("💾 Сохранить", key="quick_save_btn"):
+                                    if not quick_group_name:
+                                        st.error("Введите название группы")
+                                    elif quick_group_name in st.session_state.resource_groups:
+                                        # Активировать диалог выбора
+                                        st.session_state.group_save_dialog = quick_group_name
+                                        st.rerun()
+                                    else:
+                                        # Группа не существует, создать новую
+                                        st.session_state.resource_groups[quick_group_name] = selected_resources.copy()
+                                        # Сохранить в файл
+                                        save_employees_data(
+                                            st.session_state.saved_resources,
+                                            st.session_state.resource_groups
+                                        )
+                                        st.success(f"✓ Группа '{quick_group_name}' создана ({len(selected_resources)} чел.)")
+                                        st.rerun()
+                    
+                    if selected_resources:
+                        # Использовать workload_data вместо filtered_data для отображения всех выбранных ресурсов
+                        # Это позволяет показывать ресурсы из группы, даже если они не проходят фильтр поиска
+                        display_data = [item for item in workload_data 
+                                      if item['resource_name'] in selected_resources]
+                    else:
+                        display_data = workload_data
+            
+            # ========== ТАБ 2: УПРАВЛЕНИЕ ГРУППАМИ ==========
+            with tab2:
+                # Выбор и применение сохраненной группы
+                if st.session_state.resource_groups:
+                    st.markdown("**Применить сохраненную группу:**")
+                    sorted_group_names = sorted(st.session_state.resource_groups.keys(), key=str.lower)
+                    group_names = ["-- Не выбрано --"] + sorted_group_names
+                    selected_group = st.selectbox(
+                        "Выберите группу:",
+                        options=group_names,
+                        key="selected_group_dropdown"
+                    )
+                    
+                    # Кнопка для применения группы
+                    if selected_group != "-- Не выбрано --":
+                        group_resources = st.session_state.resource_groups[selected_group]
+                        st.caption(f"👥 {len(group_resources)} человек: {', '.join(group_resources[:3])}{'...' if len(group_resources) > 3 else ''}")
+                        
+                        if st.button("✅ Применить группу", key="apply_group_btn"):
+                            st.session_state.applied_group = (selected_group, group_resources)
+                            # Обновить selected_resources_state списком ресурсов из группы
+                            st.session_state.selected_resources_state = group_resources.copy()
+                            # Увеличить счетчик для принудительного пересоздания multiselect
+                            st.session_state.multiselect_key_counter += 1
+                            st.success(f"✓ Группа '{selected_group}' применена ({len(group_resources)} чел.)")
+                            st.rerun()
+                    
+                    st.markdown("---")
+                else:
+                    st.info("У вас пока нет сохраненных групп. Создайте новую ниже.")
+                
+                # Создание новой группы с нуля
+                st.markdown("**Создать новую группу:**")
+                with st.expander("➕ Создать группу", expanded=not st.session_state.resource_groups):
+                    new_group_name = st.text_input("Название группы:", placeholder="например, Разработчики", key="new_group_name_input")
+                    
+                    # Использовать полный список сохраненных сотрудников
+                    all_names = sorted([r.get('name', '') for r in st.session_state.saved_resources], key=str.lower)
+                    new_group_resources = st.multiselect(
+                        "Выберите участников группы:",
+                        options=all_names,
+                        key="new_group_resources"
+                    )
+                    
+                    if st.button("💾 Сохранить группу", key="save_new_group_btn"):
+                        if not new_group_name:
+                            st.error("Введите название группы")
+                        elif not new_group_resources:
+                            st.error("Выберите хотя бы одного участника")
+                        elif new_group_name in st.session_state.resource_groups:
+                            st.error("Группа с таким названием уже существует")
+                        else:
+                            st.session_state.resource_groups[new_group_name] = new_group_resources
                             # Сохранить в файл
                             save_employees_data(
                                 st.session_state.saved_resources,
                                 st.session_state.resource_groups
                             )
-                            st.success(f"✓ Группа '{group_name}' удалена")
+                            st.success(f"✓ Группа '{new_group_name}' создана ({len(new_group_resources)} чел.)")
                             st.rerun()
-                    
-                    # Expander с полным составом группы
-                    with st.expander(f"👁️ Просмотр состава группы '{group_name}'"):
-                        if len(group_members) > 0:
-                            # Вывести всех участников в виде нумерованного списка
-                            for idx, member in enumerate(group_members, 1):
-                                st.text(f"{idx}. {member}")
-                        else:
-                            st.caption("Группа пуста")
-                    
-                    st.markdown("")  # Добавить отступ между группами
-        
-        # ========== ТАБ 3: УПРАВЛЕНИЕ СОТРУДНИКАМИ ==========
-        with tab3:
-            st.markdown("**Управление перечнем сотрудников:**")
+                
+                # Управление существующими группами
+                if st.session_state.resource_groups:
+                    st.markdown("---")
+                    st.markdown("**Управление группами:**")
+                    for group_name in list(st.session_state.resource_groups.keys()):
+                        group_members = st.session_state.resource_groups[group_name]
+                        
+                        # Заголовок группы с кнопкой удаления
+                        col1, col2 = st.columns([4, 1])
+                        with col1:
+                            st.markdown(f"**{group_name}** ({len(group_members)} чел.)")
+                        with col2:
+                            if st.button("🗑️", key=f"delete_{group_name}", help=f"Удалить группу '{group_name}'"):
+                                del st.session_state.resource_groups[group_name]
+                                if st.session_state.applied_group and st.session_state.applied_group[0] == group_name:
+                                    st.session_state.applied_group = None
+                                    # Сбросить selected_resources_state при удалении примененной группы
+                                    st.session_state.selected_resources_state = None
+                                # Сохранить в файл
+                                save_employees_data(
+                                    st.session_state.saved_resources,
+                                    st.session_state.resource_groups
+                                )
+                                st.success(f"✓ Группа '{group_name}' удалена")
+                                st.rerun()
+                        
+                        # Expander для редактирования состава группы
+                        with st.expander(f"✏️ Редактировать группу '{group_name}'"):
+                            # Использовать полный список сохраненных сотрудников
+                            all_names = sorted([r.get('name', '') for r in st.session_state.saved_resources], key=str.lower)
+                            edited_group_resources = st.multiselect(
+                                "Выберите участников группы:",
+                                options=all_names,
+                                default=group_members,
+                                key=f"edit_group_{group_name}"
+                            )
+                            
+                            if st.button("💾 Сохранить изменения", key=f"save_edit_{group_name}"):
+                                st.session_state.resource_groups[group_name] = edited_group_resources.copy()
+                                # Обновить примененную группу, если она была изменена
+                                if st.session_state.applied_group and st.session_state.applied_group[0] == group_name:
+                                    st.session_state.applied_group = (group_name, edited_group_resources.copy())
+                                    # Обновить selected_resources_state списком ресурсов из обновленной группы
+                                    st.session_state.selected_resources_state = edited_group_resources.copy()
+                                # Сохранить в файл
+                                save_employees_data(
+                                    st.session_state.saved_resources,
+                                    st.session_state.resource_groups
+                                )
+                                st.success(f"✓ Группа '{group_name}' обновлена ({len(edited_group_resources)} чел.)")
+                                st.rerun()
+                        
+                        st.markdown("")  # Добавить отступ между группами
             
-            # Отображение списка сотрудников
-            if st.session_state.saved_resources:
-                st.markdown(f"**Всего сотрудников: {len(st.session_state.saved_resources)}**")
+            # ========== ТАБ 3: УПРАВЛЕНИЕ СОТРУДНИКАМИ ==========
+            with tab3:
+                st.markdown("**Управление перечнем сотрудников:**")
                 
-                # Таблица сотрудников
-                employees_df = pd.DataFrame(st.session_state.saved_resources)
-                st.dataframe(
-                    employees_df,
-                    use_container_width=True,
-                    hide_index=True
-                )
-                
-                # Удаление сотрудника
-                st.markdown("---")
-                st.markdown("**Удалить сотрудника:**")
-                employee_names = [r.get('name', '') for r in st.session_state.saved_resources]
-                if employee_names:
-                    selected_employee_to_delete = st.selectbox(
-                        "Выберите сотрудника для удаления:",
-                        options=employee_names,
-                        key="delete_employee_select"
-                    )
-                    if st.button("🗑️ Удалить сотрудника", key="delete_employee_btn"):
+                # Отображение списка сотрудников
+                if st.session_state.saved_resources:
+                    st.markdown(f"**Всего сотрудников: {len(st.session_state.saved_resources)}**")
+                    
+                    # Инициализация состояния для редактирования
+                    if 'editing_employee' not in st.session_state:
+                        st.session_state.editing_employee = None
+                    
+                    # Обработка удаления
+                    if 'delete_employee_name' in st.session_state and st.session_state.delete_employee_name:
+                        employee_name_to_delete = st.session_state.delete_employee_name
                         st.session_state.saved_resources = [
                             r for r in st.session_state.saved_resources 
-                            if r.get('name') != selected_employee_to_delete
+                            if r.get('name') != employee_name_to_delete
                         ]
                         # Обновить группы - удалить сотрудника из всех групп
                         for group_name in st.session_state.resource_groups:
                             st.session_state.resource_groups[group_name] = [
                                 name for name in st.session_state.resource_groups[group_name]
-                                if name != selected_employee_to_delete
+                                if name != employee_name_to_delete
                             ]
                         # Сохранить в файл
                         save_employees_data(
                             st.session_state.saved_resources,
                             st.session_state.resource_groups
                         )
-                        st.success(f"✓ Сотрудник '{selected_employee_to_delete}' удален")
+                        st.success(f"✓ Сотрудник '{employee_name_to_delete}' удален")
+                        st.session_state.delete_employee_name = None
+                        st.session_state.editing_employee = None
                         st.rerun()
-            else:
-                st.info("Список сотрудников пуст. Добавьте сотрудников через форму ниже или загрузите XML-файл проекта.")
-            
-            # Добавление нового сотрудника
-            st.markdown("---")
-            st.markdown("**Добавить нового сотрудника:**")
-            with st.expander("➕ Добавить сотрудника", expanded=not st.session_state.saved_resources):
-                new_employee_id = st.text_input("ID сотрудника:", key="new_employee_id")
-                new_employee_name = st.text_input("Имя сотрудника:", key="new_employee_name")
-                new_employee_max_units = st.text_input("Max Units:", value="1.0", key="new_employee_max_units")
-                
-                if st.button("💾 Добавить сотрудника", key="add_employee_btn"):
-                    if not new_employee_id:
-                        st.error("Введите ID сотрудника")
-                    elif not new_employee_name:
-                        st.error("Введите имя сотрудника")
+                    
+                    # Инициализация состояния для фильтров и сортировки
+                    if 'filter_name' not in st.session_state:
+                        st.session_state.filter_name = ''
+                    if 'filter_max_units' not in st.session_state:
+                        st.session_state.filter_max_units = ''
+                    if 'sort_column' not in st.session_state:
+                        st.session_state.sort_column = 'Имя'
+                    if 'sort_direction' not in st.session_state:
+                        st.session_state.sort_direction = 'По возрастанию'
+                    
+                    # Секция фильтров и сортировки
+                    st.markdown("---")
+                    st.markdown("**Фильтры и сортировка:**")
+                    
+                    # Фильтры
+                    filter_col1, filter_col2 = st.columns(2)
+                    with filter_col1:
+                        filter_name = st.text_input("Фильтр по имени:", value=st.session_state.filter_name, key="filter_name_input", placeholder="Введите имя...")
+                        st.session_state.filter_name = filter_name
+                    with filter_col2:
+                        filter_max_units = st.text_input("Фильтр по Max Units:", value=st.session_state.filter_max_units, key="filter_max_units_input", placeholder="Введите значение...")
+                        st.session_state.filter_max_units = filter_max_units
+                    
+                    # Сортировка
+                    sort_col1, sort_col2 = st.columns(2)
+                    with sort_col1:
+                        sort_column = st.selectbox(
+                            "Сортировать по:",
+                            options=['Имя', 'Max Units'],
+                            index=['Имя', 'Max Units'].index(st.session_state.sort_column) if st.session_state.sort_column in ['Имя', 'Max Units'] else 0,
+                            key="sort_column_select"
+                        )
+                        st.session_state.sort_column = sort_column
+                    with sort_col2:
+                        sort_direction = st.radio(
+                            "Направление сортировки:",
+                            options=['По возрастанию', 'По убыванию'],
+                            index=0 if st.session_state.sort_direction == 'По возрастанию' else 1,
+                            key="sort_direction_radio",
+                            horizontal=True
+                        )
+                        st.session_state.sort_direction = sort_direction
+                    
+                    # Применение фильтров
+                    filtered_resources = st.session_state.saved_resources.copy()
+                    
+                    if st.session_state.filter_name:
+                        filtered_resources = [
+                            r for r in filtered_resources 
+                            if st.session_state.filter_name.lower() in str(r.get('name', '')).lower()
+                        ]
+                    
+                    if st.session_state.filter_max_units:
+                        filtered_resources = [
+                            r for r in filtered_resources 
+                            if st.session_state.filter_max_units.lower() in str(r.get('max_units', '')).lower()
+                        ]
+                    
+                    # Применение сортировки
+                    sort_reverse = st.session_state.sort_direction == 'По убыванию'
+                    
+                    if st.session_state.sort_column == 'Имя':
+                        sorted_resources = sorted(
+                            filtered_resources,
+                            key=lambda x: str(x.get('name', '')).lower(),
+                            reverse=sort_reverse
+                        )
+                    elif st.session_state.sort_column == 'Max Units':
+                        sorted_resources = sorted(
+                            filtered_resources,
+                            key=lambda x: float(str(x.get('max_units', '0')).replace(',', '.')) if str(x.get('max_units', '0')).replace(',', '.').replace('.', '').isdigit() else 0,
+                            reverse=sort_reverse
+                        )
                     else:
-                        # Проверить на дубликаты
-                        existing_ids = [r.get('id') for r in st.session_state.saved_resources]
-                        existing_names = [r.get('name') for r in st.session_state.saved_resources]
-                        
-                        if new_employee_id in existing_ids:
-                            st.error(f"Сотрудник с ID '{new_employee_id}' уже существует")
-                        elif new_employee_name in existing_names:
-                            st.error(f"Сотрудник с именем '{new_employee_name}' уже существует")
-                        else:
-                            new_employee = {
-                                'id': new_employee_id,
-                                'name': new_employee_name,
-                                'max_units': new_employee_max_units or '1.0'
+                        sorted_resources = filtered_resources
+                    
+                    # Показать количество отфильтрованных записей
+                    if len(filtered_resources) != len(st.session_state.saved_resources):
+                        st.info(f"Показано {len(filtered_resources)} из {len(st.session_state.saved_resources)} сотрудников")
+                    
+                    # CSS стили для таблицы сотрудников
+                    st.markdown("""
+                    <style>
+                    /* Уменьшение высоты кнопок до высоты текста в таблице сотрудников */
+                    button[kind="secondary"] {
+                        height: auto !important;
+                        min-height: 1.5em !important;
+                        padding: 0.25em 0.5em !important;
+                        line-height: 1.2 !important;
+                    }
+                    
+                    /* Уменьшение межстрочного интервала в таблице */
+                    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] {
+                        margin-bottom: 2px !important;
+                        padding-bottom: 2px !important;
+                    }
+                    
+                    /* Уменьшение отступов в контейнерах строк таблицы */
+                    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] > div {
+                        margin-bottom: 2px !important;
+                    }
+                    
+                    /* Уменьшение отступов между колонками в строках */
+                    div[data-testid="column"] {
+                        margin-bottom: 2px !important;
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                    
+                    # JavaScript для применения стилей прокрутки к таблице
+                    st.markdown("""
+                    <script>
+                    setTimeout(function() {
+                        // Найти контейнер с заголовками таблицы
+                        const headers = Array.from(document.querySelectorAll('*')).find(el => 
+                            el.textContent && el.textContent.includes('Имя') && 
+                            el.textContent.includes('Max Units')
+                        );
+                        if (headers) {
+                            // Найти родительский контейнер Streamlit
+                            let container = headers.closest('[data-testid="stVerticalBlock"]');
+                            if (!container) {
+                                container = headers.closest('div[class*="block-container"]');
                             }
-                            st.session_state.saved_resources.append(new_employee)
-                            # Сохранить в файл
-                            save_employees_data(
-                                st.session_state.saved_resources,
-                                st.session_state.resource_groups
-                            )
-                            st.success(f"✓ Сотрудник '{new_employee_name}' добавлен")
-                            st.rerun()
-            
-            # Редактирование сотрудника
-            if st.session_state.saved_resources:
-                st.markdown("---")
-                st.markdown("**Редактировать сотрудника:**")
-                employee_names_edit = [r.get('name', '') for r in st.session_state.saved_resources]
-                selected_employee_to_edit = st.selectbox(
-                    "Выберите сотрудника для редактирования:",
-                    options=employee_names_edit,
-                    key="edit_employee_select"
-                )
-                
-                if selected_employee_to_edit:
-                    employee_to_edit = next(
-                        (r for r in st.session_state.saved_resources if r.get('name') == selected_employee_to_edit),
-                        None
-                    )
-                    if employee_to_edit:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            edited_id = st.text_input("ID:", value=employee_to_edit.get('id', ''), key="edit_employee_id")
-                        with col2:
-                            edited_name = st.text_input("Имя:", value=employee_to_edit.get('name', ''), key="edit_employee_name")
-                        with col3:
-                            edited_max_units = st.text_input("Max Units:", value=employee_to_edit.get('max_units', '1.0'), key="edit_employee_max_units")
-                        
-                        if st.button("💾 Сохранить изменения", key="save_employee_edit_btn"):
-                            # Проверить на дубликаты (кроме текущего)
-                            existing_ids = [r.get('id') for r in st.session_state.saved_resources if r.get('name') != selected_employee_to_edit]
-                            existing_names = [r.get('name') for r in st.session_state.saved_resources if r.get('name') != selected_employee_to_edit]
+                            if (container) {
+                                container.style.maxHeight = '400px';
+                                container.style.overflowY = 'auto';
+                                container.style.overflowX = 'auto';
+                                container.style.border = '1px solid #e0e0e0';
+                                container.style.borderRadius = '4px';
+                                container.style.padding = '10px';
+                            }
                             
-                            if edited_id in existing_ids:
-                                st.error(f"Сотрудник с ID '{edited_id}' уже существует")
-                            elif edited_name in existing_names:
-                                st.error(f"Сотрудник с именем '{edited_name}' уже существует")
+                            // Применить стили к кнопкам в таблице
+                            const buttons = container.querySelectorAll('button[kind="secondary"]');
+                            buttons.forEach(button => {
+                                button.style.height = 'auto';
+                                button.style.minHeight = '1.5em';
+                                button.style.padding = '0.25em 0.5em';
+                                button.style.lineHeight = '1.2';
+                            });
+                            
+                            // Уменьшить межстрочный интервал между строками таблицы
+                            const verticalBlocks = container.querySelectorAll('[data-testid="stVerticalBlock"]');
+                            verticalBlocks.forEach((block, index) => {
+                                // Пропустить первый блок (заголовки) и применить к остальным
+                                if (index > 0) {
+                                    block.style.marginBottom = '2px';
+                                    block.style.paddingBottom = '2px';
+                                    
+                                    // Также уменьшить отступы внутри блока
+                                    const innerDivs = block.querySelectorAll('div[data-testid="stVerticalBlock"]');
+                                    innerDivs.forEach(innerDiv => {
+                                        innerDiv.style.marginBottom = '2px';
+                                        innerDiv.style.paddingBottom = '2px';
+                                    });
+                                    
+                                    // Уменьшить отступы в колонках
+                                    const columns = block.querySelectorAll('[data-testid="column"]');
+                                    columns.forEach(column => {
+                                        column.style.marginBottom = '2px';
+                                    });
+                                }
+                            });
+                        }
+                    }, 200);
+                    </script>
+                    """, unsafe_allow_html=True)
+                    
+                    # Заголовки таблицы
+                    st.markdown("---")
+                    header_col1, header_col2, header_col3, header_col4 = st.columns([3, 2, 1, 1])
+                    with header_col1:
+                        st.markdown("**Имя**")
+                    with header_col2:
+                        st.markdown("**Max Units**")
+                    with header_col3:
+                        st.markdown("**Действия**")
+                    with header_col4:
+                        st.markdown("")
+                    
+                    # Отображение списка сотрудников с кнопками
+                    for idx, employee in enumerate(sorted_resources):
+                        employee_name = employee.get('name', '')
+                        employee_max_units = employee.get('max_units', '1.0')
+                        
+                        # Если этот сотрудник редактируется
+                        if st.session_state.editing_employee == employee_name:
+                            with st.container():
+                                st.markdown("---")
+                                st.markdown(f"**✏️ Редактирование: {employee_name}**")
+                                
+                                col1, col2, col3 = st.columns([2, 2, 1])
+                                with col1:
+                                    edited_name = st.text_input("Имя:", value=employee_name, key=f"edit_name_{idx}")
+                                with col2:
+                                    edited_max_units = st.text_input("Max Units:", value=employee_max_units, key=f"edit_max_units_{idx}")
+                                with col3:
+                                    st.markdown("<br>", unsafe_allow_html=True)  # Отступ для выравнивания
+                                    save_col, cancel_col = st.columns(2)
+                                    with save_col:
+                                        if st.button("💾", key=f"save_{idx}", help="Сохранить"):
+                                            # Проверить на дубликаты (кроме текущего)
+                                            existing_names = [r.get('name') for r in st.session_state.saved_resources if r.get('name') != employee_name]
+                                            
+                                            if edited_name in existing_names:
+                                                st.error(f"Сотрудник с именем '{edited_name}' уже существует")
+                                            else:
+                                                # Обновить данные сотрудника
+                                                old_name = employee['name']
+                                                employee['name'] = edited_name
+                                                employee['max_units'] = edited_max_units
+                                                
+                                                # Обновить имя в группах, если оно изменилось
+                                                if edited_name != old_name:
+                                                    for group_name in st.session_state.resource_groups:
+                                                        if old_name in st.session_state.resource_groups[group_name]:
+                                                            index = st.session_state.resource_groups[group_name].index(old_name)
+                                                            st.session_state.resource_groups[group_name][index] = edited_name
+                                                
+                                                # Сохранить в файл
+                                                save_employees_data(
+                                                    st.session_state.saved_resources,
+                                                    st.session_state.resource_groups
+                                                )
+                                                st.session_state.editing_employee = None
+                                                st.success(f"✓ Сотрудник '{edited_name}' обновлен")
+                                                st.rerun()
+                                    with cancel_col:
+                                        if st.button("❌", key=f"cancel_{idx}", help="Отменить"):
+                                            st.session_state.editing_employee = None
+                                            st.rerun()
+                        else:
+                            # Обычное отображение строки сотрудника
+                            with st.container():
+                                col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
+                                with col1:
+                                    st.text(employee_name)
+                                with col2:
+                                    st.text(employee_max_units)
+                                with col3:
+                                    if st.button("✏️", key=f"edit_{idx}", help="Редактировать"):
+                                        st.session_state.editing_employee = employee_name
+                                        st.rerun()
+                                with col4:
+                                    if st.button("🗑️", key=f"delete_{idx}", help="Удалить"):
+                                        st.session_state.delete_employee_name = employee_name
+                                        st.rerun()
+                else:
+                    st.info("Список сотрудников пуст. Добавьте сотрудников через форму ниже или загрузите XML-файл проекта.")
+                
+                # Добавление нового сотрудника
+                st.markdown("---")
+                st.markdown("**Добавить нового сотрудника:**")
+                with st.expander("➕ Добавить сотрудника", expanded=not st.session_state.saved_resources):
+                    new_employee_name = st.text_input("Имя сотрудника:", key="new_employee_name")
+                    new_employee_max_units = st.text_input("Max Units:", value="1.0", key="new_employee_max_units")
+                    
+                    if st.button("💾 Добавить сотрудника", key="add_employee_btn"):
+                        if not new_employee_name:
+                            st.error("Введите имя сотрудника")
+                        else:
+                            # Проверить на дубликаты по имени
+                            existing_names = [r.get('name') for r in st.session_state.saved_resources]
+                            
+                            if new_employee_name in existing_names:
+                                st.error(f"Сотрудник с именем '{new_employee_name}' уже существует")
                             else:
-                                # Обновить данные сотрудника
-                                employee_to_edit['id'] = edited_id
-                                employee_to_edit['name'] = edited_name
-                                employee_to_edit['max_units'] = edited_max_units
-                                
-                                # Обновить имя в группах, если оно изменилось
-                                if edited_name != selected_employee_to_edit:
-                                    for group_name in st.session_state.resource_groups:
-                                        if selected_employee_to_edit in st.session_state.resource_groups[group_name]:
-                                            index = st.session_state.resource_groups[group_name].index(selected_employee_to_edit)
-                                            st.session_state.resource_groups[group_name][index] = edited_name
-                                
+                                new_employee = {
+                                    'name': new_employee_name,
+                                    'max_units': new_employee_max_units or '1.0'
+                                }
+                                st.session_state.saved_resources.append(new_employee)
                                 # Сохранить в файл
                                 save_employees_data(
                                     st.session_state.saved_resources,
                                     st.session_state.resource_groups
                                 )
-                                st.success(f"✓ Сотрудник '{edited_name}' обновлен")
+                                st.success(f"✓ Сотрудник '{new_employee_name}' добавлен")
                                 st.rerun()
         
         st.markdown("---")
@@ -2695,182 +3303,217 @@ def main():
         if not selected_resources and not display_data:
             st.info("Выберите ресурсы для анализа в табе 'Текущий выбор'")
         else:
-            # Таблица анализа рабочей нагрузки
-            st.markdown("### 📈 Анализ рабочей нагрузки")
-            
-            # Применить MD3 стили для таблиц
-            st.markdown(get_md3_table_style(), unsafe_allow_html=True)
-            
-            # Рассчитать фактические часы для каждого ресурса за период
-            actual_hours_dict = {}
-            if st.session_state.parser and st.session_state.date_range_start and st.session_state.date_range_end:
-                actual_hours_dict = calculate_actual_hours_per_resource(
-                    st.session_state.parser,
-                    st.session_state.date_range_start,
-                    st.session_state.date_range_end
-                )
-            
-            # Подготовка датафрейма
-            df_data = []
-            for item in display_data:
-                percentage = item['workload_percentage']
-                resource_name = item['resource_name']
-                capacity = item['max_capacity']
-                
-                # Получить фактические часы за период
-                actual_hours = actual_hours_dict.get(resource_name, 0.0)
-                
-                # Рассчитать загрузку в часах
-                workload_hours = (capacity * percentage / 100) if capacity > 0 else 0
-                
-                # Индикатор статуса
-                if percentage > 100:
-                    status = "🔴 Перегружен"
-                    status_color = "#FF4B4B"
-                elif percentage >= 70:
-                    status = "🟢 Оптимально"
-                    status_color = "#107C10"
+            # Суммарный план график
+            with st.expander("### 📅 Суммарный план график", expanded=False):
+                if st.session_state.parser:
+                    # Получить примененную группу, если она есть
+                    applied_group_dict = None
+                    if hasattr(st.session_state, 'applied_group') and st.session_state.applied_group:
+                        group_name, group_resources = st.session_state.applied_group
+                        applied_group_dict = {group_name: group_resources}
+                    
+                    # Получить маппинг parser -> file_name из session_state
+                    parser_to_file_name = st.session_state.get('parser_to_file_name', {})
+                    
+                    # Создать диаграмму Ганта
+                    # Использовать workload_data из session_state для единообразия с другими разделами
+                    workload_data_for_gantt = st.session_state.get('workload_data')
+                    gantt_fig = create_gantt_chart(
+                        st.session_state.parser,
+                        selected_resources=selected_resources if selected_resources else None,
+                        resource_groups=applied_group_dict if applied_group_dict else None,
+                        date_range_start=st.session_state.get('date_range_start'),
+                        date_range_end=st.session_state.get('date_range_end'),
+                        parser_to_file_name=parser_to_file_name if parser_to_file_name else None,
+                        workload_data=workload_data_for_gantt
+                    )
+                    
+                    if gantt_fig:
+                        st.plotly_chart(gantt_fig, use_container_width=True)
+                    else:
+                        st.info("Нет задач для отображения в выбранных ресурсах и группах")
                 else:
-                    status = "🟡 Недоиспользуется"
-                    status_color = "#FFB900"
+                    st.info("Загрузите файл MS Project для отображения плана графика")
+            
+            # Таблица анализа рабочей нагрузки
+            with st.expander("### 📈 Анализ рабочей нагрузки", expanded=False):
+                # Применить MD3 стили для таблиц
+                st.markdown(get_md3_table_style(), unsafe_allow_html=True)
                 
-                # Формируем строку в зависимости от режима отображения
-                row_data = {
-                    'Имя ресурса': resource_name,
-                    'Выделено часов': item['total_work_hours'],
-                    'Ёмкость часов': capacity,
-                    'Рабочие часы за период': actual_hours
+                # Рассчитать фактические часы для каждого ресурса за период
+                actual_hours_dict = {}
+                if st.session_state.parser and st.session_state.date_range_start and st.session_state.date_range_end:
+                    actual_hours_dict = calculate_actual_hours_per_resource(
+                        st.session_state.parser,
+                        st.session_state.date_range_start,
+                        st.session_state.date_range_end
+                    )
+                
+                # Подготовка датафрейма
+                df_data = []
+                for item in display_data:
+                    percentage = item['workload_percentage']
+                    resource_name = item['resource_name']
+                    capacity = item['max_capacity']
+                    
+                    # Получить фактические часы за период
+                    actual_hours = actual_hours_dict.get(resource_name, 0.0)
+                    
+                    # Рассчитать загрузку в часах
+                    workload_hours = (capacity * percentage / 100) if capacity > 0 else 0
+                    
+                    # Индикатор статуса
+                    if percentage > 100:
+                        status = "🔴 Перегружен"
+                        status_color = "#FF4B4B"
+                    elif percentage >= 70:
+                        status = "🟢 Оптимально"
+                        status_color = "#107C10"
+                    else:
+                        status = "🟡 Недоиспользуется"
+                        status_color = "#FFB900"
+                    
+                    # Формируем строку в зависимости от режима отображения
+                    row_data = {
+                        'Имя ресурса': resource_name,
+                        'Выделено часов': item['total_work_hours'],
+                        'Ёмкость часов': capacity,
+                        'Рабочие часы за период': actual_hours
+                    }
+                    
+                    # Добавляем колонку загрузки в зависимости от режима
+                    if st.session_state.display_mode == 'hours':
+                        row_data['Загрузка (часы)'] = workload_hours
+                    else:
+                        row_data['Нагрузка %'] = percentage
+                    
+                    row_data['Кол-во задач'] = item['task_count']
+                    row_data['Статус'] = status
+                    
+                    df_data.append(row_data)
+                
+                df = pd.DataFrame(df_data)
+                
+                # Сортировка по алфавиту по имени ресурса
+                if not df.empty:
+                    df = df.sort_values(by='Имя ресурса', key=lambda x: x.str.lower())
+                
+                # Раскраска датафрейма
+                def highlight_workload(row):
+                    # Определяем процент в зависимости от режима отображения
+                    if st.session_state.display_mode == 'hours':
+                        # В режиме часов нужно пересчитать процент из часов
+                        capacity = row['Ёмкость часов']
+                        if capacity > 0:
+                            pct = (row['Загрузка (часы)'] / capacity) * 100
+                        else:
+                            pct = 0
+                    else:
+                        pct = row['Нагрузка %']
+                    
+                    if pct > 100:
+                        return ['background-color: #FFE5E5'] * len(row)
+                    elif pct < 70:
+                        return ['background-color: #FFF4E5'] * len(row)
+                    else:
+                        return ['background-color: #E5F5E5'] * len(row)
+                
+                # Форматирование в зависимости от режима
+                format_dict = {
+                    'Выделено часов': '{:.1f}',
+                    'Ёмкость часов': '{:.1f}',
+                    'Рабочие часы за период': '{:.1f}'
                 }
                 
-                # Добавляем колонку загрузки в зависимости от режима
                 if st.session_state.display_mode == 'hours':
-                    row_data['Загрузка (часы)'] = workload_hours
+                    format_dict['Загрузка (часы)'] = '{:.1f}'
                 else:
-                    row_data['Нагрузка %'] = percentage
+                    format_dict['Нагрузка %'] = '{:.1f}%'
                 
-                row_data['Кол-во задач'] = item['task_count']
-                row_data['Статус'] = status
+                styled_df = df.style.apply(highlight_workload, axis=1).format(format_dict)
                 
-                df_data.append(row_data)
-            
-            df = pd.DataFrame(df_data)
-            
-            # Раскраска датафрейма
-            def highlight_workload(row):
-                # Определяем процент в зависимости от режима отображения
-                if st.session_state.display_mode == 'hours':
-                    # В режиме часов нужно пересчитать процент из часов
-                    capacity = row['Ёмкость часов']
-                    if capacity > 0:
-                        pct = (row['Загрузка (часы)'] / capacity) * 100
-                    else:
-                        pct = 0
-                else:
-                    pct = row['Нагрузка %']
-                
-                if pct > 100:
-                    return ['background-color: #FFE5E5'] * len(row)
-                elif pct < 70:
-                    return ['background-color: #FFF4E5'] * len(row)
-                else:
-                    return ['background-color: #E5F5E5'] * len(row)
-            
-            # Форматирование в зависимости от режима
-            format_dict = {
-                'Выделено часов': '{:.1f}',
-                'Ёмкость часов': '{:.1f}',
-                'Рабочие часы за период': '{:.1f}'
-            }
-            
-            if st.session_state.display_mode == 'hours':
-                format_dict['Загрузка (часы)'] = '{:.1f}'
-            else:
-                format_dict['Нагрузка %'] = '{:.1f}%'
-            
-            styled_df = df.style.apply(highlight_workload, axis=1).format(format_dict)
-            
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+                st.dataframe(styled_df, use_container_width=True, hide_index=True)
             
             # Детализация задач
-            st.markdown("### 📋 Детализация задач")
-            
-            for item in display_data:
-                with st.expander(f"{item['resource_name']} - {item['workload_percentage']:.1f}% нагрузка"):
-                    if item['tasks']:
-                        task_df = pd.DataFrame(item['tasks'])
-                        st.dataframe(task_df, use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Задачи не назначены")
+            with st.expander("### 📋 Детализация задач", expanded=False):
+                # Сортировка display_data по алфавиту для детализации задач
+                sorted_display_data = sorted(display_data, key=lambda x: x['resource_name'].lower())
+                for item in sorted_display_data:
+                    with st.expander(f"{item['resource_name']} - {item['workload_percentage']:.1f}% нагрузка"):
+                        if item['tasks']:
+                            task_df = pd.DataFrame(item['tasks'])
+                            st.dataframe(task_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("Задачи не назначены")
             
             # Рекомендации
-            st.markdown("### 💡 Рекомендации")
-            
-            # Фильтрация analysis по выбранным ресурсам
-            if selected_resources:
-                filtered_analysis = {
-                    'overloaded': [r for r in analysis['overloaded'] if r['resource_name'] in selected_resources],
-                    'optimal': [r for r in analysis['optimal'] if r['resource_name'] in selected_resources],
-                    'underutilized': [r for r in analysis['underutilized'] if r['resource_name'] in selected_resources]
-                }
-            else:
-                filtered_analysis = analysis
-            
-            recommendations = generate_recommendations(filtered_analysis)
-            
-            if recommendations:
-                for i, rec in enumerate(recommendations, 1):
-                    priority_color = {
-                        'High': '#FF4B4B',
-                        'Medium': '#FFB900',
-                        'Low': '#107C10'
-                    }.get(rec.get('priority', 'Low'), '#107C10')
-                    
-                    priority_text = {
-                        'High': 'Высокий приоритет',
-                        'Medium': 'Средний приоритет',
-                        'Low': 'Низкий приоритет'
-                    }.get(rec.get('priority', 'Low'), 'Низкий приоритет')
-                    
-                    if rec['type'] == 'Reassign Tasks':
-                        st.markdown(f"""
-                        <div style='background-color: white; padding: 15px; border-radius: 8px; 
-                                    margin: 10px 0; border-left: 4px solid {priority_color}'>
-                            <b>{i}. Перераспределить задачи</b> 
-                            <span style='background-color: {priority_color}; color: white; 
-                                         padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                {priority_text}
-                            </span><br/>
-                            Перенести <b>{rec['hours']:.1f} часов</b> работы от 
-                            <b>{rec['from']}</b> к <b>{rec['to']}</b>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    elif rec['type'] == 'Hire Additional Resources':
-                        st.markdown(f"""
-                        <div style='background-color: white; padding: 15px; border-radius: 8px; 
-                                    margin: 10px 0; border-left: 4px solid {priority_color}'>
-                            <b>{i}. Нанять дополнительные ресурсы</b>
-                            <span style='background-color: {priority_color}; color: white; 
-                                         padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                {priority_text}
-                            </span><br/>
-                            Рассмотрите найм дополнительных ресурсов для поддержки <b>{rec['resource']}</b><br/>
-                            Причина: {rec['reason']}
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div style='background-color: white; padding: 15px; border-radius: 8px; 
-                                    margin: 10px 0; border-left: 4px solid {priority_color}'>
-                            <b>{i}. Увеличить использование</b>
-                            <span style='background-color: {priority_color}; color: white; 
-                                         padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                {priority_text}
-                            </span><br/>
-                            <b>{rec['resource']}</b> имеет {rec['available_capacity']} доступной мощности
-                        </div>
-                        """, unsafe_allow_html=True)
-            else:
-                st.success("✓ Все ресурсы распределены оптимально!")
+            with st.expander("### 💡 Рекомендации", expanded=False):
+                # Фильтрация analysis по выбранным ресурсам
+                if selected_resources:
+                    filtered_analysis = {
+                        'overloaded': [r for r in analysis['overloaded'] if r['resource_name'] in selected_resources],
+                        'optimal': [r for r in analysis['optimal'] if r['resource_name'] in selected_resources],
+                        'underutilized': [r for r in analysis['underutilized'] if r['resource_name'] in selected_resources]
+                    }
+                else:
+                    filtered_analysis = analysis
+                
+                recommendations = generate_recommendations(filtered_analysis)
+                
+                if recommendations:
+                    for i, rec in enumerate(recommendations, 1):
+                        priority_color = {
+                            'High': '#FF4B4B',
+                            'Medium': '#FFB900',
+                            'Low': '#107C10'
+                        }.get(rec.get('priority', 'Low'), '#107C10')
+                        
+                        priority_text = {
+                            'High': 'Высокий приоритет',
+                            'Medium': 'Средний приоритет',
+                            'Low': 'Низкий приоритет'
+                        }.get(rec.get('priority', 'Low'), 'Низкий приоритет')
+                        
+                        if rec['type'] == 'Reassign Tasks':
+                            st.markdown(f"""
+                            <div style='background-color: white; padding: 15px; border-radius: 8px; 
+                                        margin: 10px 0; border-left: 4px solid {priority_color}'>
+                                <b>{i}. Перераспределить задачи</b> 
+                                <span style='background-color: {priority_color}; color: white; 
+                                             padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
+                                    {priority_text}
+                                </span><br/>
+                                Перенести <b>{rec['hours']:.1f} часов</b> работы от 
+                                <b>{rec['from']}</b> к <b>{rec['to']}</b>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        elif rec['type'] == 'Hire Additional Resources':
+                            st.markdown(f"""
+                            <div style='background-color: white; padding: 15px; border-radius: 8px; 
+                                        margin: 10px 0; border-left: 4px solid {priority_color}'>
+                                <b>{i}. Нанять дополнительные ресурсы</b>
+                                <span style='background-color: {priority_color}; color: white; 
+                                             padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
+                                    {priority_text}
+                                </span><br/>
+                                Рассмотрите найм дополнительных ресурсов для поддержки <b>{rec['resource']}</b><br/>
+                                Причина: {rec['reason']}
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"""
+                            <div style='background-color: white; padding: 15px; border-radius: 8px; 
+                                        margin: 10px 0; border-left: 4px solid {priority_color}'>
+                                <b>{i}. Увеличить использование</b>
+                                <span style='background-color: {priority_color}; color: white; 
+                                             padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
+                                    {priority_text}
+                                </span><br/>
+                                <b>{rec['resource']}</b> имеет {rec['available_capacity']} доступной мощности
+                            </div>
+                            """, unsafe_allow_html=True)
+                else:
+                    st.success("✓ Все ресурсы распределены оптимально!")
             
             # Оптимизация с смещением задач
             st.markdown("---")
@@ -2971,9 +3614,10 @@ def main():
                     timeline_data = st.session_state.timeline_data
                 
                 # Выбор ресурса для детальной визуализации
+                sorted_timeline_keys = sorted(timeline_data.keys(), key=str.lower)
                 selected_resource_timeline = st.selectbox(
                     "Выберите ресурс для детального анализа",
-                    options=list(timeline_data.keys()),
+                    options=sorted_timeline_keys,
                     key="timeline_resource_select"
                 )
                 
@@ -3071,7 +3715,7 @@ def main():
                         st.markdown(f"**Избыток:** {overload_pct - 100:.1f}%")
                         
                         # Варианты замены (недоиспользуемые ресурсы)
-                        replacement_options = [r['resource_name'] for r in filtered_analysis['underutilized']]
+                        replacement_options = sorted([r['resource_name'] for r in filtered_analysis['underutilized']], key=str.lower)
                         replacement_options.insert(0, "-- Не менять --")
                         
                         selected_replacement = st.selectbox(
@@ -3155,6 +3799,9 @@ def main():
             # Визуализация
             st.markdown("### 📊 Распределение рабочей нагрузки")
             
+            # Сортировка display_data по алфавиту для графика
+            sorted_display_data = sorted(display_data, key=lambda x: x['resource_name'].lower())
+            
             # Получить MD3 цвета для графиков
             chart_colors = get_md3_chart_colors()
             color_overloaded = chart_colors['overloaded']
@@ -3166,20 +3813,20 @@ def main():
             # Подготовить данные в зависимости от режима отображения
             if st.session_state.display_mode == 'hours':
                 # Режим часов
-                y_values = [(item['max_capacity'] * item['workload_percentage'] / 100) for item in display_data]
+                y_values = [(item['max_capacity'] * item['workload_percentage'] / 100) for item in sorted_display_data]
                 text_values = [f"{y:.1f} ч." for y in y_values]
                 hover_template = '<b>%{x}</b><br>Загрузка: %{y:.1f} ч.<br><extra></extra>'
                 yaxis_title = "Загрузка (часы)"
                 
                 # Пороговые линии в часах (средняя ёмкость)
-                avg_capacity = sum([item['max_capacity'] for item in display_data]) / len(display_data) if display_data else 0
+                avg_capacity = sum([item['max_capacity'] for item in sorted_display_data]) / len(sorted_display_data) if sorted_display_data else 0
                 threshold_100 = avg_capacity
                 threshold_70 = avg_capacity * 0.7
                 line1_text = f"{threshold_100:.1f} ч. (100%)"
                 line2_text = f"{threshold_70:.1f} ч. (70%)"
             else:
                 # Режим процентов
-                y_values = [item['workload_percentage'] for item in display_data]
+                y_values = [item['workload_percentage'] for item in sorted_display_data]
                 text_values = [f"{y:.1f}%" for y in y_values]
                 hover_template = '<b>%{x}</b><br>Нагрузка: %{y:.1f}%<br><extra></extra>'
                 yaxis_title = "Процент нагрузки (%)"
@@ -3190,7 +3837,7 @@ def main():
             
             # Цветовая кодировка
             colors_map = []
-            for item in display_data:
+            for item in sorted_display_data:
                 percentage = item['workload_percentage']
                 if percentage > 100:
                     colors_map.append(color_overloaded)
@@ -3200,7 +3847,7 @@ def main():
                     colors_map.append(color_underutilized)
             
             fig.add_trace(go.Bar(
-                x=[item['resource_name'] for item in display_data],
+                x=[item['resource_name'] for item in sorted_display_data],
                 y=y_values,
                 marker_color=colors_map,
                 text=text_values,
