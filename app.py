@@ -849,6 +849,37 @@ def generate_recommendations(analysis):
     
     return recommendations
 
+def sort_recommendations_by_priority(recommendations):
+    """Sort recommendations by priority (High > Medium > Low) and by hours for Reassign Tasks"""
+    priority_order = {'High': 0, 'Medium': 1, 'Low': 2}
+    
+    def sort_key(rec):
+        priority = rec.get('priority', 'Low')
+        priority_score = priority_order.get(priority, 2)
+        # For Reassign Tasks, also sort by hours (descending)
+        if rec.get('type') == 'Reassign Tasks':
+            hours = rec.get('hours', 0)
+            return (priority_score, -hours)
+        return (priority_score, 0)
+    
+    return sorted(recommendations, key=sort_key)
+
+def group_recommendations_by_type(recommendations):
+    """Group recommendations by type"""
+    groups = {
+        'Reassign Tasks': [],
+        'Hire Additional Resources': [],
+        'Increase Utilization': []
+    }
+    
+    for rec in recommendations:
+        rec_type = rec.get('type', '')
+        if rec_type in groups:
+            groups[rec_type].append(rec)
+    
+    # Return only non-empty groups
+    return {k: v for k, v in groups.items() if v}
+
 def export_to_csv(workload_df, analysis, parser=None, timeline_data=None, optimization_results=None, date_start=None, date_end=None, business_days=None, capacity=None):
     """
     Экспорт детального анализа в CSV с несколькими секциями:
@@ -1961,7 +1992,7 @@ def main():
         st.markdown("---")
         
         # Объединенная секция управления персоналом
-        selected_resources, display_data = render_personnel_management(workload_data)
+        selected_resources, display_data = render_personnel_management(workload_data, parser=st.session_state.parser)
         
         st.markdown("---")
         
@@ -2144,57 +2175,98 @@ def main():
                 recommendations = generate_recommendations(filtered_analysis)
                 
                 if recommendations:
-                    for i, rec in enumerate(recommendations, 1):
-                        priority_color = {
-                            'High': '#FF4B4B',
-                            'Medium': '#FFB900',
-                            'Low': '#107C10'
-                        }.get(rec.get('priority', 'Low'), '#107C10')
+                    # Сортировка рекомендаций по приоритету
+                    recommendations = sort_recommendations_by_priority(recommendations)
+                    
+                    # Группировка рекомендаций по типу
+                    grouped_recs = group_recommendations_by_type(recommendations)
+                    
+                    # Определение порядка приоритетов для сортировки групп
+                    priority_order = {'High': 0, 'Medium': 1, 'Low': 2}
+                    
+                    # Словарь для названий типов на русском
+                    type_names = {
+                        'Reassign Tasks': 'Перераспределить задачи',
+                        'Hire Additional Resources': 'Нанять дополнительные ресурсы',
+                        'Increase Utilization': 'Увеличить использование'
+                    }
+                    
+                    # Словари для цветов и текста приоритетов
+                    priority_color = {
+                        'High': '#FF4B4B',
+                        'Medium': '#FFB900',
+                        'Low': '#107C10'
+                    }
+                    
+                    priority_text = {
+                        'High': 'Высокий приоритет',
+                        'Medium': 'Средний приоритет',
+                        'Low': 'Низкий приоритет'
+                    }
+                    
+                    # Сортировка групп по максимальному приоритету в группе
+                    def get_group_priority(group_recs):
+                        priorities = [priority_order.get(rec.get('priority', 'Low'), 2) for rec in group_recs]
+                        return min(priorities) if priorities else 2
+                    
+                    sorted_groups = sorted(grouped_recs.items(), key=lambda x: get_group_priority(x[1]))
+                    
+                    # Отображение групп
+                    for rec_type, group_recs in sorted_groups:
+                        count = len(group_recs)
+                        type_name = type_names.get(rec_type, rec_type)
                         
-                        priority_text = {
-                            'High': 'Высокий приоритет',
-                            'Medium': 'Средний приоритет',
-                            'Low': 'Низкий приоритет'
-                        }.get(rec.get('priority', 'Low'), 'Низкий приоритет')
-                        
-                        if rec['type'] == 'Reassign Tasks':
-                            st.markdown(f"""
-                            <div style='background-color: white; padding: 15px; border-radius: 8px; 
-                                        margin: 10px 0; border-left: 4px solid {priority_color}'>
-                                <b>{i}. Перераспределить задачи</b> 
-                                <span style='background-color: {priority_color}; color: white; 
-                                             padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                    {priority_text}
-                                </span><br/>
-                                Перенести <b>{rec['hours']:.1f} часов</b> работы от 
-                                <b>{rec['from']}</b> к <b>{rec['to']}</b>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        elif rec['type'] == 'Hire Additional Resources':
-                            st.markdown(f"""
-                            <div style='background-color: white; padding: 15px; border-radius: 8px; 
-                                        margin: 10px 0; border-left: 4px solid {priority_color}'>
-                                <b>{i}. Нанять дополнительные ресурсы</b>
-                                <span style='background-color: {priority_color}; color: white; 
-                                             padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                    {priority_text}
-                                </span><br/>
-                                Рассмотрите найм дополнительных ресурсов для поддержки <b>{rec['resource']}</b><br/>
-                                Причина: {rec['reason']}
-                            </div>
-                            """, unsafe_allow_html=True)
+                        # Формирование заголовка expander'а
+                        if rec_type == 'Reassign Tasks':
+                            total_hours = sum(rec.get('hours', 0) for rec in group_recs)
+                            header = f"### 🔄 {type_name} ({count} рекомендаций, всего {total_hours:.1f} ч.)"
                         else:
-                            st.markdown(f"""
-                            <div style='background-color: white; padding: 15px; border-radius: 8px; 
-                                        margin: 10px 0; border-left: 4px solid {priority_color}'>
-                                <b>{i}. Увеличить использование</b>
-                                <span style='background-color: {priority_color}; color: white; 
-                                             padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
-                                    {priority_text}
-                                </span><br/>
-                                <b>{rec['resource']}</b> имеет {rec['available_capacity']} доступной мощности
-                            </div>
-                            """, unsafe_allow_html=True)
+                            header = f"### 📋 {type_name} ({count} рекомендаций)"
+                        
+                        with st.expander(header, expanded=False):
+                            for i, rec in enumerate(group_recs, 1):
+                                rec_priority = rec.get('priority', 'Low')
+                                rec_priority_color = priority_color.get(rec_priority, '#107C10')
+                                rec_priority_text = priority_text.get(rec_priority, 'Низкий приоритет')
+                                
+                                if rec_type == 'Reassign Tasks':
+                                    st.markdown(f"""
+                                    <div style='background-color: white; padding: 15px; border-radius: 8px; 
+                                                margin: 10px 0; border-left: 4px solid {rec_priority_color}'>
+                                        <b>{i}. Перераспределить задачи</b> 
+                                        <span style='background-color: {rec_priority_color}; color: white; 
+                                                     padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
+                                            {rec_priority_text}
+                                        </span><br/>
+                                        Перенести <b>{rec['hours']:.1f} часов</b> работы от 
+                                        <b>{rec['from']}</b> к <b>{rec['to']}</b>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                elif rec_type == 'Hire Additional Resources':
+                                    st.markdown(f"""
+                                    <div style='background-color: white; padding: 15px; border-radius: 8px; 
+                                                margin: 10px 0; border-left: 4px solid {rec_priority_color}'>
+                                        <b>{i}. Нанять дополнительные ресурсы</b>
+                                        <span style='background-color: {rec_priority_color}; color: white; 
+                                                     padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
+                                            {rec_priority_text}
+                                        </span><br/>
+                                        Рассмотрите найм дополнительных ресурсов для поддержки <b>{rec['resource']}</b><br/>
+                                        Причина: {rec['reason']}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                elif rec_type == 'Increase Utilization':
+                                    st.markdown(f"""
+                                    <div style='background-color: white; padding: 15px; border-radius: 8px; 
+                                                margin: 10px 0; border-left: 4px solid {rec_priority_color}'>
+                                        <b>{i}. Увеличить использование</b>
+                                        <span style='background-color: {rec_priority_color}; color: white; 
+                                                     padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px'>
+                                            {rec_priority_text}
+                                        </span><br/>
+                                        <b>{rec['resource']}</b> имеет {rec['available_capacity']} доступной мощности
+                                    </div>
+                                    """, unsafe_allow_html=True)
                 else:
                     st.success("✓ Все ресурсы распределены оптимально!")
             

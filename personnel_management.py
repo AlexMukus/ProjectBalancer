@@ -132,12 +132,55 @@ def merge_resources(existing_resources, new_resources, conflict_resolutions=None
     return merged
 
 
-def render_personnel_management(workload_data):
+def get_xml_resource_names_from_parser(parser):
+    """
+    Получить список уникальных имен ресурсов из XML файлов через assignments парсера.
+    Это гарантирует, что возвращаются только ресурсы, которые реально есть в XML.
+    
+    Args:
+        parser: объект MSProjectParser или MultiProjectParser
+    
+    Returns:
+        Список уникальных имен ресурсов из XML
+    """
+    if parser is None:
+        return []
+    
+    xml_resource_names = set()
+    
+    try:
+        # Получить assignments из парсера
+        if hasattr(parser, 'parsers'):
+            # MultiProjectParser - получить assignments из всех парсеров
+            for sub_parser in parser.parsers:
+                if hasattr(sub_parser, 'assignments') and sub_parser.assignments:
+                    for assignment in sub_parser.assignments:
+                        resource_name = assignment.get('resource_name', '')
+                        if resource_name:
+                            xml_resource_names.add(resource_name)
+        else:
+            # MSProjectParser - получить assignments напрямую
+            if hasattr(parser, 'assignments') and parser.assignments:
+                for assignment in parser.assignments:
+                    resource_name = assignment.get('resource_name', '')
+                    if resource_name:
+                        xml_resource_names.add(resource_name)
+    except Exception as e:
+        # В случае ошибки вернуть пустой список
+        st.warning(f"Ошибка при получении ресурсов из парсера: {str(e)}")
+        return []
+    
+    return sorted(list(xml_resource_names), key=str.lower)
+
+
+def render_personnel_management(workload_data, parser=None):
     """
     UI компонент для управления персоналом
     
     Args:
         workload_data: список словарей с данными о рабочей нагрузке ресурсов
+        parser: опциональный объект парсера (MSProjectParser или MultiProjectParser)
+                для получения списка ресурсов напрямую из XML
     """
     with st.expander("### 👥 Управление персоналом", expanded=True):
         # Инициализация applied_group если нужно
@@ -207,8 +250,13 @@ def render_personnel_management(workload_data):
             filtered_data = sorted(filtered_data, key=lambda x: x['resource_name'].lower())
             
             # Получить список всех ресурсов из XML (не отфильтрованных поиском)
-            # Использовать workload_data, чтобы всегда иметь все ресурсы из XML
-            xml_resource_names = [item['resource_name'] for item in workload_data] if workload_data else []
+            # Приоритет: использовать парсер для получения ресурсов напрямую из XML
+            # Если парсер не передан, использовать workload_data как fallback
+            if parser is not None:
+                xml_resource_names = get_xml_resource_names_from_parser(parser)
+            else:
+                # Fallback: использовать workload_data
+                xml_resource_names = [item['resource_name'] for item in workload_data] if workload_data else []
             
             # Определить состав группы, если она применена
             group_resources_for_select = []
@@ -216,19 +264,19 @@ def render_personnel_management(workload_data):
                 group_name, group_resources = st.session_state.applied_group
                 group_resources_for_select = group_resources.copy()
             
-            # Объединить ресурсы из XML и группы для options в multiselect
-            # Сначала ресурсы из группы (чтобы они были видны), затем из XML
-            all_options = []
-            # Добавить ресурсы из группы
-            for name in group_resources_for_select:
-                if name not in all_options:
-                    all_options.append(name)
-            # Добавить ресурсы из XML, которых еще нет
-            for name in xml_resource_names:
-                if name not in all_options:
-                    all_options.append(name)
-            # Сортировать по алфавиту
-            all_options = sorted(all_options, key=str.lower)
+            # Использовать только ресурсы из XML для options в multiselect
+            all_options = sorted(xml_resource_names, key=str.lower)
+            
+            # Сбросить selected_resources_state, если он содержит ресурсы, которых нет в XML
+            if st.session_state.selected_resources_state is not None:
+                # Проверить, есть ли ресурсы в selected_resources_state, которых нет в XML
+                invalid_resources = [name for name in st.session_state.selected_resources_state if name not in xml_resource_names]
+                if invalid_resources:
+                    # Отфильтровать selected_resources_state, оставив только ресурсы из XML
+                    st.session_state.selected_resources_state = [name for name in st.session_state.selected_resources_state if name in xml_resource_names]
+                    # Если после фильтрации список пуст, сбросить в None
+                    if not st.session_state.selected_resources_state:
+                        st.session_state.selected_resources_state = None
             
             if not filtered_data and not group_resources_for_select:
                 st.warning("Ресурсы, соответствующие вашему запросу, не найдены.")
@@ -239,250 +287,32 @@ def render_personnel_management(workload_data):
                 if st.session_state.applied_group:
                     # Группа применена: использовать selected_resources_state или ресурсы из группы
                     group_name, group_resources = st.session_state.applied_group
-                    st.info(f"📌 Применена группа '{group_name}' ({len(group_resources)} чел.). Вы можете добавить дополнительные ресурсы из списка ниже.")
-                    # Использовать selected_resources_state, если он установлен, иначе использовать ресурсы из группы
+                    
+                    # Фильтровать ресурсы из группы, оставляя только те, что есть в XML
+                    filtered_group_resources = [name for name in group_resources if name in xml_resource_names]
+                    
+                    # Показать предупреждение, если некоторые ресурсы из группы отсутствуют в XML
+                    if len(filtered_group_resources) < len(group_resources):
+                        missing_count = len(group_resources) - len(filtered_group_resources)
+                        st.warning(f"⚠️ В группе '{group_name}' {missing_count} ресурс(ов) отсутствует в загруженных XML файлах и не будет отображен.")
+                    
+                    st.info(f"📌 Применена группа '{group_name}' ({len(filtered_group_resources)} из {len(group_resources)} чел. доступны в XML). Вы можете добавить дополнительные ресурсы из списка ниже.")
+                    
+                    # Использовать selected_resources_state, если он установлен, иначе использовать отфильтрованные ресурсы из группы
                     if st.session_state.selected_resources_state is not None:
-                        default_resources = st.session_state.selected_resources_state.copy()
+                        # Фильтровать selected_resources_state, оставляя только ресурсы из XML
+                        default_resources = [name for name in st.session_state.selected_resources_state if name in xml_resource_names]
                     else:
-                        default_resources = group_resources.copy()
+                        default_resources = filtered_group_resources.copy()
                 else:
-                    # Группа не применена: использовать selected_resources_state или всех из filtered_data
+                    # Группа не применена: использовать selected_resources_state или всех из XML
                     if st.session_state.selected_resources_state is not None:
-                        default_resources = st.session_state.selected_resources_state.copy()
+                        # Фильтровать selected_resources_state, оставляя только ресурсы из XML
+                        default_resources = [name for name in st.session_state.selected_resources_state if name in xml_resource_names]
                     else:
                         default_resources = xml_resource_names.copy()
                 
-                # Определить ресурсы, которых нет в XML (для подсветки)
-                resources_not_in_xml = [name for name in all_options if name not in xml_resource_names]
-                
-                # Добавить CSS и JavaScript для подсветки ресурсов, которых нет в XML
-                if resources_not_in_xml:
-                    # Создать JSON-строку для JavaScript
-                    resources_not_in_xml_json = json.dumps(resources_not_in_xml, ensure_ascii=False)
-                    
-                    highlight_css_js = f"""
-                    <style>
-                        /* Подсветка опций multiselect, которых нет в XML */
-                        div[data-baseweb="select"] ul[role="listbox"] li {{
-                            transition: background-color 0.2s;
-                        }}
-                        
-                        /* Желтая подсветка для ресурсов, которых нет в XML */
-                        div[data-baseweb="select"] ul[role="listbox"] li[data-resource-not-in-xml="true"] {{
-                            background-color: #FFF9C4 !important;
-                            border-left: 3px solid #FBC02D !important;
-                        }}
-                        
-                        div[data-baseweb="select"] ul[role="listbox"] li[data-resource-not-in-xml="true"]:hover {{
-                            background-color: #FFF59D !important;
-                        }}
-                        
-                        /* Подсветка выбранных опций, которых нет в XML */
-                        div[data-baseweb="select"] ul[role="listbox"] li[data-resource-not-in-xml="true"][aria-selected="true"] {{
-                            background-color: #FFF176 !important;
-                        }}
-                        
-                        /* Желтая подсветка для выбранных элементов (chips), которых нет в XML */
-                        div[data-baseweb="select"] span[data-resource-not-in-xml="true"],
-                        div[data-baseweb="select"] div[data-resource-not-in-xml="true"],
-                        div[data-baseweb="select"] [data-resource-not-in-xml="true"] {{
-                            background-color: #FFF9C4 !important;
-                            color: #856404 !important;
-                            border: 1px solid #FBC02D !important;
-                            border-radius: 4px !important;
-                            padding: 2px 6px !important;
-                            margin: 2px !important;
-                        }}
-                        
-                        /* Стили для выбранных значений в multiselect через data-baseweb */
-                        div[data-baseweb="select"] [data-baseweb="tag"][data-resource-not-in-xml="true"],
-                        div[data-baseweb="select"] [data-baseweb="multiValue"][data-resource-not-in-xml="true"] {{
-                            background-color: #FFF9C4 !important;
-                            color: #856404 !important;
-                            border: 1px solid #FBC02D !important;
-                        }}
-                        
-                        /* Универсальный селектор для всех элементов с атрибутом */
-                        [data-resource-not-in-xml="true"] {{
-                            background-color: #FFF9C4 !important;
-                            color: #856404 !important;
-                            border: 1px solid #FBC02D !important;
-                        }}
-                    </style>
-                    <script>
-                        (function() {{
-                            const resourcesNotInXml = {resources_not_in_xml_json};
-                            
-                            function highlightResources() {{
-                                // Найти все multiselect контейнеры
-                                const selectContainers = document.querySelectorAll('div[data-baseweb="select"]');
-                                
-                                selectContainers.forEach(selectContainer => {{
-                                    // Проверить, что это нужный multiselect (по label или key)
-                                    const label = selectContainer.closest('.stMultiSelect') || 
-                                                 selectContainer.closest('[data-testid*="stMultiSelect"]');
-                                    
-                                    if (!label) return;
-                                    
-                                    // Найти список опций
-                                    const listbox = selectContainer.querySelector('ul[role="listbox"]');
-                                    if (listbox) {{
-                                        // Пройти по всем опциям
-                                        const options = listbox.querySelectorAll('li[role="option"]');
-                                        options.forEach(option => {{
-                                            const optionText = option.textContent.trim();
-                                            // Проверить, есть ли этот ресурс в списке тех, кого нет в XML
-                                            if (resourcesNotInXml.some(resource => optionText === resource)) {{
-                                                option.setAttribute('data-resource-not-in-xml', 'true');
-                                            }} else {{
-                                                option.removeAttribute('data-resource-not-in-xml');
-                                            }}
-                                        }});
-                                    }}
-                                    
-                                    // Найти выбранные элементы (chips/tags)
-                                    // В Streamlit multiselect выбранные значения находятся в разных местах
-                                    // Попробуем найти их через различные селекторы
-                                    
-                                    // Метод 1: Найти через data-baseweb="tag" или data-baseweb="multiValue"
-                                    const tags1 = selectContainer.querySelectorAll('[data-baseweb="tag"], [data-baseweb="multiValue"]');
-                                    tags1.forEach(tag => {{
-                                        const text = tag.textContent.trim();
-                                        if (text && resourcesNotInXml.some(resource => text === resource)) {{
-                                            tag.setAttribute('data-resource-not-in-xml', 'true');
-                                            tag.style.setProperty('background-color', '#FFF9C4', 'important');
-                                            tag.style.setProperty('color', '#856404', 'important');
-                                            tag.style.setProperty('border', '1px solid #FBC02D', 'important');
-                                        }}
-                                    }});
-                                    
-                                    // Метод 2: Найти все span и div, которые не в dropdown
-                                    const allElements = selectContainer.querySelectorAll('span, div');
-                                    allElements.forEach(element => {{
-                                        // Пропустить элементы внутри dropdown
-                                        if (element.closest('ul[role="listbox"]')) {{
-                                            return;
-                                        }}
-                                        
-                                        // Пропустить элементы, которые уже обработаны
-                                        if (element.closest('[data-baseweb="tag"]') || element.closest('[data-baseweb="multiValue"]')) {{
-                                            return;
-                                        }}
-                                        
-                                        const text = element.textContent.trim();
-                                        // Проверить точное совпадение с ресурсами, которых нет в XML
-                                        let matchingResource = null;
-                                        for (let i = 0; i < resourcesNotInXml.length; i++) {{
-                                            const resource = resourcesNotInXml[i];
-                                            // Точное совпадение или совпадение с учетом пробелов
-                                            if (text === resource || text.replace(/\\s+/g, ' ') === resource.replace(/\\s+/g, ' ')) {{
-                                                matchingResource = resource;
-                                                break;
-                                            }}
-                                        }}
-                                        
-                                        if (matchingResource) {{
-                                            // Проверить, что это не пустой элемент и не часть структуры
-                                            if (text.length > 0 && text.length < 200 && !element.querySelector('svg') && !element.querySelector('input')) {{
-                                                // Проверить, что это не родительский элемент с множеством дочерних
-                                                if (element.children.length < 3) {{
-                                                    element.setAttribute('data-resource-not-in-xml', 'true');
-                                                    // Применить стили с !important через setProperty
-                                                    element.style.setProperty('background-color', '#FFF9C4', 'important');
-                                                    element.style.setProperty('color', '#856404', 'important');
-                                                    element.style.setProperty('border', '1px solid #FBC02D', 'important');
-                                                    element.style.setProperty('border-radius', '4px', 'important');
-                                                    element.style.setProperty('padding', '2px 6px', 'important');
-                                                    element.style.setProperty('margin', '2px', 'important');
-                                                    element.style.setProperty('display', 'inline-block', 'important');
-                                                }}
-                                            }}
-                                        }} else if (element.hasAttribute('data-resource-not-in-xml')) {{
-                                            // Убрать стили, если элемент больше не соответствует
-                                            element.removeAttribute('data-resource-not-in-xml');
-                                            element.style.removeProperty('background-color');
-                                            element.style.removeProperty('color');
-                                            element.style.removeProperty('border');
-                                            element.style.removeProperty('border-radius');
-                                            element.style.removeProperty('padding');
-                                            element.style.removeProperty('margin');
-                                            element.style.removeProperty('display');
-                                        }}
-                                    }});
-                                }});
-                            }}
-                            
-                            // Выполнить при загрузке
-                            if (document.readyState === 'loading') {{
-                                document.addEventListener('DOMContentLoaded', highlightResources);
-                            }} else {{
-                                highlightResources();
-                            }}
-                            
-                            // Выполнить при изменении (для динамического обновления)
-                            const observer = new MutationObserver(function(mutations) {{
-                                let shouldHighlight = false;
-                                mutations.forEach(function(mutation) {{
-                                    if (mutation.addedNodes.length > 0 || mutation.type === 'childList') {{
-                                        shouldHighlight = true;
-                                    }}
-                                }});
-                                if (shouldHighlight) {{
-                                    setTimeout(highlightResources, 50);
-                                }}
-                            }});
-                            
-                            observer.observe(document.body, {{
-                                childList: true,
-                                subtree: true
-                            }});
-                            
-                            // Также выполнить после небольшой задержки для Streamlit
-                            setTimeout(highlightResources, 100);
-                            setTimeout(highlightResources, 300);
-                            setTimeout(highlightResources, 500);
-                            setTimeout(highlightResources, 1000);
-                            setTimeout(highlightResources, 2000);
-                            
-                            // Выполнить при клике (для обновления при открытии dropdown)
-                            document.addEventListener('click', function() {{
-                                setTimeout(highlightResources, 100);
-                            }});
-                            
-                            // Выполнить при изменении значения (для обновления выбранных элементов)
-                            function setupInputObserver() {{
-                                const selectContainers = document.querySelectorAll('div[data-baseweb="select"]');
-                                selectContainers.forEach(container => {{
-                                    const inputObserver = new MutationObserver(function(mutations) {{
-                                        let shouldUpdate = false;
-                                        mutations.forEach(function(mutation) {{
-                                            if (mutation.type === 'childList' || mutation.type === 'attributes') {{
-                                                shouldUpdate = true;
-                                            }}
-                                        }});
-                                        if (shouldUpdate) {{
-                                            setTimeout(highlightResources, 50);
-                                        }}
-                                    }});
-                                    
-                                    inputObserver.observe(container, {{
-                                        childList: true,
-                                        subtree: true,
-                                        attributes: true,
-                                        attributeFilter: ['class', 'style']
-                                    }});
-                                }});
-                            }}
-                            
-                            // Настроить observer после небольшой задержки
-                            setTimeout(setupInputObserver, 200);
-                            setTimeout(setupInputObserver, 1000);
-                        }})();
-                    </script>
-                    """
-                    st.markdown(highlight_css_js, unsafe_allow_html=True)
-                
-                # Множественный выбор - options содержат ресурсы из группы + ресурсы из XML
+                # Множественный выбор - options содержат только ресурсы из XML
                 # Использовать динамический ключ для принудительного пересоздания виджета при применении группы
                 multiselect_key = f"current_selection_multiselect_{st.session_state.multiselect_key_counter}"
                 selected_resources = st.multiselect(
