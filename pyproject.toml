@@ -12,4 +12,5 @@ dependencies = [
     "python-dateutil>=2.9.0.post0",
     "reportlab>=4.4.4",
     "streamlit>=1.51.0",
+    "pytest>=7.0.0",
 ]

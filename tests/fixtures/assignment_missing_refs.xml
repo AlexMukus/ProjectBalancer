@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project xmlns="http://schemas.microsoft.com/project">
+    <Assignments>
+        <Assignment>
+            <UID>1</UID>
+            <TaskUID>999</TaskUID>
+            <ResourceUID>999</ResourceUID>
+            <Work>PT40H0M0S</Work>
+        </Assignment>
+    </Assignments>
+</Project>
+

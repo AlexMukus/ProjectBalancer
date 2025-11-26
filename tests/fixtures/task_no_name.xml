@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project xmlns="http://schemas.microsoft.com/project">
+    <Tasks>
+        <Task>
+            <UID>1</UID>
+            <Start>2025-01-01T08:00:00</Start>
+            <Finish>2025-01-05T17:00:00</Finish>
+        </Task>
+    </Tasks>
+</Project>
+

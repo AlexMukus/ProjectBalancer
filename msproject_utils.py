@@ -94,6 +94,25 @@ def get_text(element, tag, namespace, default=''):
     """
     logger = logging.getLogger(__name__)
     try:
+        # Проверить, является ли сам элемент искомым
+        # Сравнить тег элемента с искомым тегом
+        element_tag = element.tag
+        if element_tag == tag:
+            # Элемент сам является искомым
+            if element.text:
+                return element.text.strip() if element.text else default
+            return default
+        
+        # Также проверить случай, когда тег может быть с namespace префиксом
+        # Например, если tag = 'ns:Test', а element.tag = '{http://...}Test'
+        if namespace and ':' in tag:
+            tag_local = tag.split(':', 1)[1]  # Извлечь локальную часть после префикса
+            if element_tag.endswith('}' + tag_local) or element_tag == tag_local:
+                if element.text:
+                    return element.text.strip() if element.text else default
+                return default
+        
+        # Поиск дочернего элемента
         found = element.find(tag, namespace) if namespace else element.find(tag)
         if found is not None and found.text:
             return found.text.strip() if found.text else default
@@ -281,8 +300,16 @@ def calculate_available_work_hours(date_start, date_end, default_hours=160):
     if not date_start or not date_end:
         return default_hours
     
+    # Проверить, что даты одинаковые (с учетом типа)
+    from datetime import datetime as dt_class, date as date_class
+    if isinstance(date_start, datetime) and isinstance(date_end, datetime):
+        if date_start.date() == date_end.date():
+            return 8
+    elif isinstance(date_start, date_class) and isinstance(date_end, date_class):
+        if date_start == date_end:
+            return 8
+    
     # Конвертировать date в datetime для вычислений
-    from datetime import datetime as dt_class
     if isinstance(date_start, datetime):
         range_start_dt = date_start
     else:

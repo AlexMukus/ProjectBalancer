@@ -40,19 +40,23 @@ def parse_resources(root, namespace, filter_inactive=True):
             # Извлечение основных полей
             resource_id = get_text(resource, make_tag('UID', namespace), namespace)
             name = get_text(resource, make_tag('Name', namespace), namespace)
-            max_units = get_text(resource, make_tag('MaxUnits', namespace), namespace, default='1.0')
-            is_inactive = get_text(resource, make_tag('IsInactive', namespace), namespace, default='0')
             
-            # Проверка на пустые значения
-            if not resource_id:
+            # Проверка на пустые значения (после strip)
+            # Пустая строка после strip() должна быть отфильтрована
+            if not resource_id or not resource_id.strip():
                 logger.warning(f"Ресурс #{idx}: пропущен из-за пустого UID")
                 skipped_count += 1
                 continue
             
-            if not name:
+            if not name or not name.strip():
                 logger.warning(f"Ресурс #{idx} (UID={resource_id}): пропущен из-за пустого Name")
                 skipped_count += 1
                 continue
+            
+            # Извлечение MaxUnits и IsInactive
+            # MaxUnits может отсутствовать - используется default значение '1.0'
+            max_units = get_text(resource, make_tag('MaxUnits', namespace), namespace, default='1.0')
+            is_inactive = get_text(resource, make_tag('IsInactive', namespace), namespace, default='0')
             
             # Фильтрация по IsInactive
             if filter_inactive and is_inactive == '1':

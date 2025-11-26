@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project>
+    <Resources>
+        <Resource>
+            <UID>1</UID>
+            <Name>Resource Without Namespace</Name>
+            <MaxUnits>1.0</MaxUnits>
+        </Resource>
+    </Resources>
+</Project>
+

@@ -4,10 +4,75 @@
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from collections import defaultdict
+import os
 from msproject_utils import parse_date, find_task_by_name_and_dates
 
 
-def create_gantt_chart(parser, selected_resources=None, resource_groups=None, date_range_start=None, date_range_end=None, parser_to_file_name=None, workload_data=None):
+def _remove_file_extension(file_name):
+    """
+    Удаляет расширение файла из имени
+    
+    Args:
+        file_name: имя файла с расширением (например, 'project.xml')
+    
+    Returns:
+        имя файла без расширения (например, 'project')
+    """
+    if not file_name:
+        return file_name
+    return os.path.splitext(file_name)[0]
+
+
+def _shorten_resource_name(resource_name):
+    """
+    Сокращает имя ресурса по формуле: первое слово полностью + первая буква второго + первая буква третьего
+    
+    Args:
+        resource_name: полное имя ресурса (например, 'Иванов Иван Петрович')
+    
+    Returns:
+        сокращенное имя (например, 'Иванов И.П.')
+    """
+    if not resource_name:
+        return resource_name
+    
+    words = resource_name.split()
+    if not words:
+        return resource_name
+    
+    # Первое слово полностью
+    result = words[0]
+    
+    # Первая буква второго слова
+    if len(words) > 1:
+        result += ' ' + words[1][0] + '.'
+    
+    # Первая буква третьего слова
+    if len(words) > 2:
+        result += words[2][0] + '.'
+    
+    return result
+
+
+def _truncate_text(text, max_length=15):
+    """
+    Обрезает текст до указанной длины
+    
+    Args:
+        text: исходный текст
+        max_length: максимальная длина (по умолчанию 15)
+    
+    Returns:
+        обрезанный текст
+    """
+    if not text:
+        return text
+    if len(text) <= max_length:
+        return text
+    return text[:max_length]
+
+
+def create_gantt_chart(parser, selected_resources=None, resource_groups=None, date_range_start=None, date_range_end=None, parser_to_file_name=None, workload_data=None, sort_by='resource'):
     """
     Создает диаграмму Ганта для задач выбранных ресурсов и групп
     
@@ -19,6 +84,7 @@ def create_gantt_chart(parser, selected_resources=None, resource_groups=None, da
         date_range_end: конец временного диапазона анализа (datetime.date или None)
         parser_to_file_name: словарь {parser: file_name} для маппинга парсеров к именам файлов (опционально)
         workload_data: список словарей с данными о рабочей нагрузке (опционально). Если передан, используется вместо повторного прохода по parser
+        sort_by: способ сортировки задач ('project' - по проектам, 'resource' - по ресурсам, по умолчанию 'resource')
     
     Returns:
         Plotly figure с диаграммой Ганта или None если нет данных
@@ -57,7 +123,8 @@ def create_gantt_chart(parser, selected_resources=None, resource_groups=None, da
         for sub_parser in parser.parsers:
             # Использовать имя файла как имя проекта
             if parser_to_file_name and sub_parser in parser_to_file_name:
-                project_name = parser_to_file_name[sub_parser]
+                file_name = parser_to_file_name[sub_parser]
+                project_name = _remove_file_extension(file_name)
             else:
                 # Fallback: использовать project_name из парсера или имя по умолчанию
                 project_name = getattr(sub_parser, 'project_name', 'Неизвестный проект')
@@ -71,7 +138,8 @@ def create_gantt_chart(parser, selected_resources=None, resource_groups=None, da
     else:
         # MSProjectParser - использовать имя файла как имя проекта
         if parser_to_file_name and parser in parser_to_file_name:
-            project_name = parser_to_file_name[parser]
+            file_name = parser_to_file_name[parser]
+            project_name = _remove_file_extension(file_name)
         else:
             # Fallback: использовать project_name из парсера или имя по умолчанию
             project_name = getattr(parser, 'project_name', 'Неизвестный проект')
@@ -199,14 +267,22 @@ def create_gantt_chart(parser, selected_resources=None, resource_groups=None, da
     if not tasks_data:
         return None
     
-    # Группировать задачи по ресурсам
-    tasks_by_resource = defaultdict(list)
-    for task_data in tasks_data:
-        resource_name = task_data['resource_name']
-        tasks_by_resource[resource_name].append(task_data)
+    # Группировать задачи в зависимости от sort_by
+    if sort_by == 'project':
+        # Группировать по проектам
+        tasks_by_group = defaultdict(list)
+        for task_data in tasks_data:
+            project_name = task_data.get('project_name', 'Неизвестный проект')
+            tasks_by_group[project_name].append(task_data)
+    else:
+        # Группировать по ресурсам (по умолчанию)
+        tasks_by_group = defaultdict(list)
+        for task_data in tasks_data:
+            resource_name = task_data['resource_name']
+            tasks_by_group[resource_name].append(task_data)
     
-    # Сортировать ресурсы по имени
-    sorted_resources = sorted(tasks_by_resource.keys())
+    # Сортировать группы по имени
+    sorted_groups = sorted(tasks_by_group.keys())
     
     # Подготовить данные для Plotly
     y_positions = []
@@ -215,28 +291,39 @@ def create_gantt_chart(parser, selected_resources=None, resource_groups=None, da
     x_ends = []
     colors = []
     hover_texts = []
+    project_names_for_annotations = []  # Для аннотаций справа
     
-    # Цвета для разных ресурсов
+    # Цвета для разных файлов (проектов)
     import plotly.colors as pc
-    resource_colors = {}
+    project_colors = {}
     color_palette = pc.qualitative.Set3 + pc.qualitative.Pastel + pc.qualitative.Dark2
     
     y_pos = 0
-    for resource_name in sorted_resources:
-        resource_tasks = tasks_by_resource[resource_name]
+    for group_name in sorted_groups:
+        group_tasks = tasks_by_group[group_name]
         # Сортировать задачи по дате начала
-        resource_tasks.sort(key=lambda x: x['start'])
+        group_tasks.sort(key=lambda x: x['start'])
         
-        # Получить цвет для ресурса
-        if resource_name not in resource_colors:
-            resource_colors[resource_name] = color_palette[len(resource_colors) % len(color_palette)]
-        
-        color = resource_colors[resource_name]
-        
-        for task_data in resource_tasks:
+        for task_data in group_tasks:
+            # Получить цвет для проекта (файла)
+            project_name = task_data.get('project_name', 'Неизвестный проект')
+            if project_name not in project_colors:
+                project_colors[project_name] = color_palette[len(project_colors) % len(color_palette)]
+            
+            color = project_colors[project_name]
+            
             y_positions.append(y_pos)
-            # Упрощенная метка: только имя ресурса
-            y_labels.append(task_data['resource_name'])
+            # Сократить имя ресурса и обрезать до 15 символов
+            resource_name = task_data['resource_name']
+            shortened_name = _shorten_resource_name(resource_name)
+            y_label = _truncate_text(shortened_name, max_length=15)
+            y_labels.append(y_label)
+            
+            # Сохранить project_name для аннотаций справа (обрезать до 15 символов)
+            project_name = task_data.get('project_name', 'Неизвестный проект')
+            project_name_short = _truncate_text(project_name, max_length=15)
+            project_names_for_annotations.append(project_name_short)
+            
             x_starts.append(task_data['start'])
             x_ends.append(task_data['finish'])
             colors.append(color)
@@ -357,22 +444,54 @@ def create_gantt_chart(parser, selected_resources=None, resource_groups=None, da
     if xaxis_range:
         xaxis_config['range'] = xaxis_range
     
+    # Определить заголовок оси Y в зависимости от типа сортировки
+    yaxis_title = 'Проекты' if sort_by == 'project' else 'Ресурсы'
+    
+    # Определить цвета в зависимости от типа сортировки
+    # Темно-серый: '#333333', серый: '#666666'
+    if sort_by == 'project':
+        # При сортировке по проектам: проекты темно-серые, ресурсы серые
+        resource_color = '#666666'  # Серый для ресурсов (метки оси Y)
+        project_color = '#333333'  # Темно-серый для проектов (аннотации справа)
+    else:
+        # При сортировке по ресурсам: ресурсы темно-серые, проекты серые
+        resource_color = '#333333'  # Темно-серый для ресурсов (метки оси Y)
+        project_color = '#666666'   # Серый для проектов (аннотации справа)
+    
+    # Добавить аннотации справа от графика с именами проектов
+    if y_positions and project_names_for_annotations:
+        # Использовать paper coordinates для позиционирования справа от графика
+        # x=1 означает правый край области графика, xshift добавляет отступ
+        for i, (y_pos, project_name) in enumerate(zip(y_positions, project_names_for_annotations)):
+            fig.add_annotation(
+                x=1,
+                y=y_pos,
+                text=project_name,
+                showarrow=False,
+                xref='paper',  # Использовать координаты относительно области графика (0-1)
+                yref='y',      # Y координаты в данных
+                xanchor='left',
+                yanchor='middle',
+                xshift=10,     # Отступ от правого края в пикселях
+                font=dict(size=16, color=project_color)  # Цвет зависит от типа сортировки
+            )
+    
     fig.update_layout(
         title='Суммарный план график',
         xaxis_title='Дата',
-        yaxis_title='Задачи',
-        height=max(400, len(y_positions) * 30 + 100),
+        yaxis_title=yaxis_title,
+        height=max(400, len(y_positions) * 30 + 100),  # Высота для однострочных меток
         hovermode='closest',
         yaxis=dict(
             tickmode='array',
             tickvals=y_positions,
             ticktext=y_labels,
             autorange='reversed',
-            tickfont=dict(size=16)  # Размер шрифта равен толщине линии
+            tickfont=dict(size=16, color=resource_color)  # Цвет зависит от типа сортировки
         ),
         xaxis=xaxis_config,
         plot_bgcolor='white',
-        margin=dict(l=100, r=50, t=50, b=50)  # Уменьшен margin left для увеличения области диаграммы
+        margin=dict(l=100, r=150, t=50, b=50)  # Увеличен margin right для размещения аннотаций с именами проектов
     )
     
     return fig

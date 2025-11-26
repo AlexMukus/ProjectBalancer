@@ -1,0 +1,18 @@
+Collecting pytest
+  Downloading pytest-9.0.1-py3-none-any.whl.metadata (7.6 kB)
+Requirement already satisfied: colorama>=0.4 in c:\msprojectanalyzer\projectbalancer\.venv\lib\site-packages (from pytest) (0.4.6)
+Collecting iniconfig>=1.0.1 (from pytest)
+  Downloading iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Requirement already satisfied: packaging>=22 in c:\msprojectanalyzer\projectbalancer\.venv\lib\site-packages (from pytest) (25.0)
+Collecting pluggy<2,>=1.5 (from pytest)
+  Downloading pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Collecting pygments>=2.7.2 (from pytest)
+  Downloading pygments-2.19.2-py3-none-any.whl.metadata (2.5 kB)
+Downloading pytest-9.0.1-py3-none-any.whl (373 kB)
+Downloading pluggy-1.6.0-py3-none-any.whl (20 kB)
+Downloading iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Downloading pygments-2.19.2-py3-none-any.whl (1.2 MB)
+   ---------------------------------------- 1.2/1.2 MB 5.8 MB/s  0:00:00
+Installing collected packages: pygments, pluggy, iniconfig, pytest
+
+Successfully installed iniconfig-2.3.0 pluggy-1.6.0 pygments-2.19.2 pytest-9.0.1

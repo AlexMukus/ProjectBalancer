@@ -357,6 +357,10 @@ class MSProjectParser:
             total_work_hours = 0
             task_details = []
             
+            # Множества для подсчета уникальных задач
+            unique_task_ids_in_range = set()
+            unique_task_ids_total = set()
+            
             for assignment in resource_assignments:
                 # Get task info по комбинации имени и дат
                 task = find_task_by_name_and_dates(
@@ -366,42 +370,63 @@ class MSProjectParser:
                     assignment.get('task_finish')
                 )
                 
-                if task and task.get('start') and task.get('finish'):
-                    task_start = self._parse_date(task['start'])
-                    task_end = self._parse_date(task['finish'])
-                    
-                    if task_start and task_end and range_start_dt and range_end_dt:
-                        # Проверить пересечение задачи с диапазоном
-                        overlap_days, proportion = self.compute_overlap(
-                            task_start, task_end, range_start_dt, range_end_dt
+                if task:
+                    # Получить task_id для подсчета уникальных задач
+                    task_id = task.get('id')
+                    if not task_id or task_id == 'N/A':
+                        # Fallback: использовать комбинацию имени и дат
+                        task_id = (
+                            task.get('name', ''),
+                            task.get('start', ''),
+                            task.get('finish', '')
                         )
+                    
+                    # Добавить в общее множество уникальных задач
+                    unique_task_ids_total.add(task_id)
+                    
+                    if task.get('start') and task.get('finish'):
+                        task_start = self._parse_date(task['start'])
+                        task_end = self._parse_date(task['finish'])
                         
-                        if proportion > 0:
-                            # Учитывать только часы попадающие в диапазон
-                            total_task_hours = self._parse_work_hours(assignment['work'])
-                            hours_in_range = total_task_hours * proportion
-                            total_work_hours += hours_in_range
+                        if task_start and task_end and range_start_dt and range_end_dt:
+                            # Проверить пересечение задачи с диапазоном
+                            overlap_days, proportion = self.compute_overlap(
+                                task_start, task_end, range_start_dt, range_end_dt
+                            )
+                            
+                            if proportion > 0:
+                                # Учитывать только часы попадающие в диапазон
+                                total_task_hours = self._parse_work_hours(assignment['work'])
+                                hours_in_range = total_task_hours * proportion
+                                total_work_hours += hours_in_range
+                                
+                                # Добавить в множество задач в диапазоне
+                                unique_task_ids_in_range.add(task_id)
+                                
+                                task_details.append({
+                                    'task_id': task.get('id', 'N/A'),  # Только для отладки
+                                    'task_name': task['name'],
+                                    'work_hours': hours_in_range,
+                                    'total_hours': total_task_hours,
+                                    'proportion': proportion,
+                                    'start': task.get('start', 'N/A'),
+                                    'finish': task.get('finish', 'N/A')
+                                })
+                        else:
+                            # Если нет диапазона, учитывать всю задачу
+                            work_hours = self._parse_work_hours(assignment['work'])
+                            total_work_hours += work_hours
+                            
+                            # Если нет диапазона, все задачи считаются в диапазоне
+                            unique_task_ids_in_range.add(task_id)
                             
                             task_details.append({
                                 'task_id': task.get('id', 'N/A'),  # Только для отладки
                                 'task_name': task['name'],
-                                'work_hours': hours_in_range,
-                                'total_hours': total_task_hours,
-                                'proportion': proportion,
+                                'work_hours': work_hours,
                                 'start': task.get('start', 'N/A'),
                                 'finish': task.get('finish', 'N/A')
                             })
-                    else:
-                        # Если нет диапазона, учитывать всю задачу
-                        work_hours = self._parse_work_hours(assignment['work'])
-                        total_work_hours += work_hours
-                        task_details.append({
-                            'task_id': task.get('id', 'N/A'),  # Только для отладки
-                            'task_name': task['name'],
-                            'work_hours': work_hours,
-                            'start': task.get('start', 'N/A'),
-                            'finish': task.get('finish', 'N/A')
-                        })
             
             # Calculate capacity based on resource MaxUnits and available work hours
             max_units = float(resource.get('max_units', 1.0))
@@ -417,7 +442,8 @@ class MSProjectParser:
                 'total_work_hours': total_work_hours,
                 'max_capacity': max_capacity,
                 'workload_percentage': workload_percentage,
-                'task_count': len(resource_assignments),
+                'task_count_in_range': len(unique_task_ids_in_range),
+                'task_count_total': len(unique_task_ids_total),
                 'tasks': task_details,
                 'project_weeks': project_weeks
             })
@@ -680,11 +706,17 @@ class MultiProjectParser:
     
     def get_resource_workload_data(self, date_range_start=None, date_range_end=None):
         """Агрегирует нагрузку из всех проектов"""
-        # Получить данные из всех парсеров
+        # Получить данные из всех парсеров с фильтром дат
         all_workload_data = []
         for parser in self.parsers:
             workload_data = parser.get_resource_workload_data(date_range_start, date_range_end)
             all_workload_data.extend(workload_data)
+        
+        # Получить данные без фильтра дат для подсчета общего количества задач
+        all_workload_data_total = []
+        for parser in self.parsers:
+            workload_data_total = parser.get_resource_workload_data(None, None)
+            all_workload_data_total.extend(workload_data_total)
         
         # Агрегировать данные по ресурсам
         aggregated = {}
@@ -718,23 +750,62 @@ class MultiProjectParser:
                 'total_work_hours': 0,
                 'max_capacity': max_capacity,
                 'workload_percentage': 0,
-                'task_count': 0,
+                'task_count_in_range': 0,
+                'task_count_total': 0,
                 'tasks': [],
                 'project_weeks': project_weeks
             }
         
-        # Агрегировать данные из всех проектов
+        # Агрегировать данные из всех проектов (с фильтром дат)
         for item in all_workload_data:
             resource_name = item['resource_name']
             if resource_name in aggregated:
                 aggregated[resource_name]['total_work_hours'] += item['total_work_hours']
-                aggregated[resource_name]['task_count'] += item['task_count']
                 aggregated[resource_name]['tasks'].extend(item['tasks'])
         
-        # Пересчитать проценты нагрузки
+        # Подсчитать уникальные задачи в диапазоне из tasks
+        for resource_name, data in aggregated.items():
+            unique_task_ids_in_range = set()
+            for task_detail in data['tasks']:
+                task_id = task_detail.get('task_id')
+                if not task_id or task_id == 'N/A':
+                    # Fallback: использовать комбинацию имени и дат
+                    task_id = (
+                        task_detail.get('task_name', ''),
+                        task_detail.get('start', ''),
+                        task_detail.get('finish', '')
+                    )
+                unique_task_ids_in_range.add(task_id)
+            data['task_count_in_range'] = len(unique_task_ids_in_range)
+        
+        # Подсчитать уникальные задачи по всем проектам (без фильтра дат)
+        for item in all_workload_data_total:
+            resource_name = item['resource_name']
+            if resource_name in aggregated:
+                # Собрать все task_id из всех задач ресурса
+                for task_detail in item.get('tasks', []):
+                    task_id = task_detail.get('task_id')
+                    if not task_id or task_id == 'N/A':
+                        # Fallback: использовать комбинацию имени и дат
+                        task_id = (
+                            task_detail.get('task_name', ''),
+                            task_detail.get('start', ''),
+                            task_detail.get('finish', '')
+                        )
+                    # Используем отдельное множество для каждого ресурса
+                    if 'unique_task_ids_total_set' not in aggregated[resource_name]:
+                        aggregated[resource_name]['unique_task_ids_total_set'] = set()
+                    aggregated[resource_name]['unique_task_ids_total_set'].add(task_id)
+        
+        # Пересчитать проценты нагрузки и финализировать подсчет задач
         for resource_name, data in aggregated.items():
             if data['max_capacity'] > 0:
                 data['workload_percentage'] = (data['total_work_hours'] / data['max_capacity']) * 100
+            
+            # Подсчитать общее количество уникальных задач
+            if 'unique_task_ids_total_set' in data:
+                data['task_count_total'] = len(data['unique_task_ids_total_set'])
+                del data['unique_task_ids_total_set']  # Удалить временное множество
         
         return list(aggregated.values())
     
@@ -1481,14 +1552,14 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
     # Заголовки таблицы
     if has_period_hours:
         if has_hours_col:
-            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Загрузка (ч)', 'Задачи', 'Статус']]
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Загрузка (ч)', 'Задач в периоде', 'Всего задач', 'Статус']]
         else:
-            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Нагрузка %', 'Задачи', 'Статус']]
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Часы за период', 'Нагрузка %', 'Задач в периоде', 'Всего задач', 'Статус']]
     else:
         if has_hours_col:
-            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Загрузка (ч)', 'Задачи', 'Статус']]
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Загрузка (ч)', 'Задач в периоде', 'Всего задач', 'Статус']]
         else:
-            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Нагрузка %', 'Задачи', 'Статус']]
+            table_data = [['Ресурс', 'Выделено', 'Ёмкость', 'Нагрузка %', 'Задач в периоде', 'Всего задач', 'Статус']]
     
     for _, row in workload_df.iterrows():
         # Вычислить процент для определения статуса
@@ -1502,6 +1573,9 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
         status = 'Перегружен' if percentage > 100 else ('Оптимально' if percentage >= 70 else 'Недоиспользуется')
         
         # Формировать строку в зависимости от наличия колонок
+        task_count_in_range = int(row.get('Задач в периоде', 0))
+        task_count_total = int(row.get('Всего задач', 0))
+        
         if has_period_hours:
             if has_hours_col:
                 table_data.append([
@@ -1510,7 +1584,8 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
                     f"{row['Ёмкость часов']:.1f}ч",
                     f"{row['Рабочие часы за период']:.1f}ч",
                     f"{row['Загрузка (часы)']:.1f}ч",
-                    str(row['Кол-во задач']),
+                    str(task_count_in_range),
+                    str(task_count_total),
                     status
                 ])
             else:
@@ -1520,7 +1595,8 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
                     f"{row['Ёмкость часов']:.1f}ч",
                     f"{row['Рабочие часы за период']:.1f}ч",
                     f"{row['Нагрузка %']:.1f}%",
-                    str(row['Кол-во задач']),
+                    str(task_count_in_range),
+                    str(task_count_total),
                     status
                 ])
         else:
@@ -1530,7 +1606,8 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
                     f"{row['Выделено часов']:.1f}ч",
                     f"{row['Ёмкость часов']:.1f}ч",
                     f"{row['Загрузка (часы)']:.1f}ч",
-                    str(row['Кол-во задач']),
+                    str(task_count_in_range),
+                    str(task_count_total),
                     status
                 ])
             else:
@@ -1539,7 +1616,8 @@ def export_to_pdf(workload_df, analysis, recommendations, parser=None, timeline_
                     f"{row['Выделено часов']:.1f}ч",
                     f"{row['Ёмкость часов']:.1f}ч",
                     f"{row['Нагрузка %']:.1f}%",
-                    str(row['Кол-во задач']),
+                    str(task_count_in_range),
+                    str(task_count_total),
                     status
                 ])
     
@@ -3315,6 +3393,18 @@ def main():
                     # Получить маппинг parser -> file_name из session_state
                     parser_to_file_name = st.session_state.get('parser_to_file_name', {})
                     
+                    # Выбор типа сортировки
+                    if 'gantt_sort_by' not in st.session_state:
+                        st.session_state.gantt_sort_by = 'project'
+                    
+                    sort_by = st.selectbox(
+                        "Сортировка:",
+                        options=['project', 'resource'],
+                        format_func=lambda x: 'По проектам' if x == 'project' else 'По ресурсам',
+                        index=0 if st.session_state.gantt_sort_by == 'project' else 1,
+                        key='gantt_sort_by'
+                    )
+                    
                     # Создать диаграмму Ганта
                     # Использовать workload_data из session_state для единообразия с другими разделами
                     workload_data_for_gantt = st.session_state.get('workload_data')
@@ -3325,7 +3415,8 @@ def main():
                         date_range_start=st.session_state.get('date_range_start'),
                         date_range_end=st.session_state.get('date_range_end'),
                         parser_to_file_name=parser_to_file_name if parser_to_file_name else None,
-                        workload_data=workload_data_for_gantt
+                        workload_data=workload_data_for_gantt,
+                        sort_by=sort_by
                     )
                     
                     if gantt_fig:
@@ -3387,7 +3478,8 @@ def main():
                     else:
                         row_data['Нагрузка %'] = percentage
                     
-                    row_data['Кол-во задач'] = item['task_count']
+                    row_data['Задач в периоде'] = item.get('task_count_in_range', 0)
+                    row_data['Всего задач'] = item.get('task_count_total', 0)
                     row_data['Статус'] = status
                     
                     df_data.append(row_data)
@@ -3422,7 +3514,9 @@ def main():
                 format_dict = {
                     'Выделено часов': '{:.1f}',
                     'Ёмкость часов': '{:.1f}',
-                    'Рабочие часы за период': '{:.1f}'
+                    'Рабочие часы за период': '{:.1f}',
+                    'Задач в периоде': '{:.0f}',
+                    'Всего задач': '{:.0f}'
                 }
                 
                 if st.session_state.display_mode == 'hours':
