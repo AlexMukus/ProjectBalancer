@@ -13,4 +13,6 @@ dependencies = [
     "reportlab>=4.4.4",
     "streamlit>=1.51.0",
     "pytest>=7.0.0",
+    "requests>=2.31.0",
+    "requests-ntlm>=1.2.0",
 ]

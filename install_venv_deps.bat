@@ -12,12 +12,12 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-echo Installing dependencies with pre-built binaries...
+echo Installing dependencies from requirements_exe.txt...
 echo This prevents compilation errors on Windows
 echo.
 
 .venv\Scripts\python.exe -m pip install --upgrade pip
-.venv\Scripts\python.exe -m pip install --only-binary :all: streamlit pandas plotly lxml reportlab openpyxl altair Pillow
+.venv\Scripts\python.exe -m pip install --only-binary :all: -r requirements_exe.txt
 
 if errorlevel 1 (
     echo ERROR: Failed to install dependencies
