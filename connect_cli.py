@@ -111,20 +111,6 @@ def main():
                         except Exception as e:
                             print(f"\n❌ Ошибка при загрузке проектов: {str(e)}")
                         
-                        # Загрузка и вывод ресурсов
-                        try:
-                            print("\n⏳ Загрузка ресурсов...")
-                            resources = data_loader.load_resources()
-                            
-                            if resources:
-                                print(f"\n👥 Ресурсы ({len(resources)}):")
-                                for resource in resources:
-                                    resource_name = resource.get('Name', resource.get('ResourceName', 'Без названия'))
-                                    print(f"  - {resource_name}")
-                            else:
-                                print("\n⚠️  Ресурсы не найдены или произошла ошибка при загрузке")
-                        except Exception as e:
-                            print(f"\n❌ Ошибка при загрузке ресурсов: {str(e)}")
                     else:
                         print("\n❌ Не удалось подключиться. Проверьте логи выше.")
         
